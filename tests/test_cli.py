@@ -9,6 +9,7 @@ from ltm100.adapters.backends.memmachine import MemMachineClient
 from ltm100.adapters.datasets.longmemeval import LongMemEvalAdapter
 from ltm100.cli import build_parser
 from ltm100.config import build_backend, build_dataset, load_config
+from ltm100.core.scenarios import get_scenario
 
 
 def _write_config(tmp_path) -> str:
@@ -114,6 +115,46 @@ def test_cli_run_parses_args(tmp_path):
     assert args.duration == 60.0
     assert args.seed == 7
     assert args.global_concurrency == 10
+
+
+def test_cli_run_parses_open_model_args(tmp_path):
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run",
+            "--config",
+            _write_config(tmp_path),
+            "--scenario",
+            "realistic",
+            "--users",
+            "20",
+            "--duration",
+            "30",
+            "--model",
+            "open",
+            "--arrival-rate",
+            "5.0",
+            "--session-ops",
+            "10",
+            "--queue-bound",
+            "4",
+            "--search-weight",
+            "0.9",
+        ]
+    )
+    assert args.model == "open"
+    assert args.arrival_rate == 5.0
+    assert args.session_ops == 10
+    assert args.queue_bound == 4
+    assert args.search_weight == 0.9
+    # The open-model flags map onto a valid RunConfig.
+    from ltm100.cli import _build_run_config
+
+    run_cfg = _build_run_config(args)
+    assert run_cfg.model == "open"
+    assert run_cfg.arrival_rate == 5.0
+    scenario = get_scenario("realistic", search_weight=args.search_weight)
+    assert scenario.search_weight == 0.9  # type: ignore[attr-defined]
 
 
 def test_cli_cleanup_subcommand(tmp_path):

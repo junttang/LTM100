@@ -33,9 +33,33 @@ class RunConfig:
     rampup: float = 0.0
     # Delete per-user state on exit.
     delete_on_exit: bool = True
+    # Load model: "closed" (fixed N users looping) or "open" (users arrive
+    # per a Poisson process, run a bounded session, then leave).
+    model: str = "closed"
+    # Open-model params (ignored when model == "closed"):
+    #   arrival_rate  - user arrivals per second (Poisson lambda)
+    #   session_ops  - ops each arriving user performs before leaving
+    #   queue_bound  - max requests queued beyond the global concurrency cap
+    #                  before rejection (0 = reject immediately on cap)
+    # The op mix (add vs search) for open sessions is owned by the Scenario
+    # plan, not by a runner-level weight — open and closed share one Scenario
+    # interface. The `realistic` scenario takes a `search_weight` constructor
+    # param for that mix.
+    arrival_rate: float = 0.0
+    session_ops: int = 0
+    queue_bound: int = 0
 
     def __post_init__(self) -> None:
         if self.duration <= 0 and self.ops <= 0:
             raise ValueError("either duration or ops must be > 0")
         if self.users <= 0:
             raise ValueError("users must be > 0")
+        if self.model not in ("closed", "open"):
+            raise ValueError(f"model must be 'closed' or 'open', got {self.model!r}")
+        if self.model == "open":
+            if self.duration <= 0:
+                raise ValueError("open model requires duration > 0")
+            if self.arrival_rate <= 0:
+                raise ValueError("open model requires arrival_rate > 0")
+            if self.session_ops <= 0:
+                raise ValueError("open model requires session_ops > 0")

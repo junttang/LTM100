@@ -214,6 +214,12 @@ Initial scenarios (easiest first):
 
 Scenarios 1–3 use the closed model; scenario 4 uses the open model.
 
+The op mix (add vs search) is owned by the Scenario plan for **both** models
+— the open model's arriving sessions consume a bounded number of ops from
+the same `plan()` interface the closed model loops over. There is no
+runner-level op-mix weight; `realistic` takes a `search_weight` constructor
+param instead.
+
 ## 7. Metrics
 
 All metrics are **client-observable** and **separated by op type**
@@ -245,9 +251,10 @@ its own (e.g. Prometheus) and is scraped separately.
 1. **Load config** (YAML) — backend endpoint/auth, transport, adapter choices.
 2. **Resolve adapters** — dataset + LTM client (+ transport).
 3. **Provision** (`LTMClient.setup`) — per-user tenants created. (out of measure)
-4. **Optional warm-up / pre-ingest** — fill memories; excluded from metrics.
-   (Not yet implemented in the runner; `search-load` currently needs memories
-   added by a prior `add-load` run. Implementing this is the next step.)
+4. **Optional warm-up / pre-ingest** — fill each user's memories (a fraction
+   of `memory_stream`) before the measured run; excluded from metrics. Enabled
+   with `--preingest` and `--preingest-fraction`; applied under the global
+   concurrency cap.
 5. **Measured run** — scenario drives users; MetricsRecorder collects.
 6. **Drain** — in-flight requests complete (or timeout).
 7. **Aggregate & report** — summary JSON/CSV + optional raw NDJSON.
@@ -264,7 +271,9 @@ dataset adapter, LTM client adapter, defaults.
 
 **CLI** (per-run, changed often): `--users N`, `--scenario`, `--duration` /
 `--ops`, `--seed`, `--global-concurrency`, `--warmup`, `--ramp-up`,
-`--stream-metrics`, `--output`, `--delete-on-exit`.
+`--preingest`, `--preingest-fraction`, `--model`, `--arrival-rate`,
+`--session-ops`, `--queue-bound`, `--search-weight`, `--output`,
+`--delete-on-exit`.
 
 ## 10. Reproducibility
 
@@ -335,13 +344,17 @@ Resolved during implementation:
   parameter (not Scenario-level).
 - NDJSON raw format: per-request `{op_type, user_id, started_at, ended_at,
   latency_ms, status, error_kind, n_items}`.
+- **Warm-up pre-ingest** (§8 step 4): the runner pre-ingests each user's
+  memories (fraction configurable) before the measured run, under the global
+  concurrency cap. Excluded from metrics.
+- **Open model + congestion policy**: a Poisson arrival process spawns
+  arriving sessions, each consuming a bounded number of ops from the Scenario
+  plan (`realistic`). A bounded queue on the global concurrency cap rejects
+  overload as `status="rejected"` (zero latency, `error_kind="queue_full"`).
+  Op mix is owned by the Scenario plan (not a runner-level weight), so the
+  open and closed models share one Scenario interface.
 
 Still open / next work:
-- **Warm-up pre-ingest** (§8 step 4): the runner does not yet pre-ingest before
-  the measured search phase — `search-load` needs memories added first.
-  Implementing this is the next step.
-- **Open model + congestion policy**: arrival-rate scenario with bounded queue
-  / rejection semantics, surfaced as `status="rejected"`. Deferred.
 - **MCP transport**: a second transport under the same `LTMClient` contract;
   depends on the MemMachine MCP server's request model. Deferred.
 

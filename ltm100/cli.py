@@ -16,6 +16,7 @@ import json
 import logging
 import sys
 from datetime import datetime, timezone
+from typing import Any
 
 from ltm100.config import build_backend, build_dataset, load_config
 from ltm100.core.config import RunConfig
@@ -35,8 +36,19 @@ def _build_run_config(args: argparse.Namespace) -> RunConfig:
         rampup=args.rampup,
         preingest=args.preingest,
         preingest_fraction=args.preingest_fraction,
+        model=args.model,
+        arrival_rate=args.arrival_rate,
+        session_ops=args.session_ops,
+        queue_bound=args.queue_bound,
         delete_on_exit=not args.no_delete_on_exit,
     )
+
+
+def _build_scenario(args: argparse.Namespace):
+    kwargs: dict[str, Any] = {}
+    if args.scenario == "realistic":
+        kwargs["search_weight"] = args.search_weight
+    return get_scenario(args.scenario, **kwargs)
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -44,7 +56,7 @@ async def _run(args: argparse.Namespace) -> int:
     dataset = build_dataset(cfg.dataset)
     backend = build_backend(cfg.backend)
     run_cfg = _build_run_config(args)
-    scenario = get_scenario(args.scenario)
+    scenario = _build_scenario(args)
 
     runner = LoadRunner(
         client=backend, dataset=dataset, scenario=scenario, config=run_cfg
@@ -121,6 +133,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="fraction of each user's memories to pre-ingest",
     )
     run.add_argument("--rampup", type=float, default=0.0, help="ramp-up seconds")
+    run.add_argument(
+        "--model",
+        choices=("closed", "open"),
+        default="closed",
+        help="load model (closed=fixed N looping users; open=Poisson arrivals)",
+    )
+    run.add_argument(
+        "--arrival-rate",
+        type=float,
+        default=0.0,
+        help="open model: user arrivals per second (Poisson lambda)",
+    )
+    run.add_argument(
+        "--session-ops",
+        type=int,
+        default=0,
+        help="open model: ops each arriving user performs before leaving",
+    )
+    run.add_argument(
+        "--queue-bound",
+        type=int,
+        default=0,
+        help="open model: max queued beyond cap before rejection (0=reject on cap)",
+    )
+    run.add_argument(
+        "--search-weight",
+        type=float,
+        default=0.8,
+        help="realistic scenario: fraction of ops that are search (0..1)",
+    )
     run.add_argument("--output", default=None, help="output dir for reports")
     run.add_argument("--raw", action="store_true", help="also write raw.ndjson")
     run.add_argument("--no-delete-on-exit", action="store_true", help="keep user state")

@@ -9,17 +9,19 @@ Termination is either time-based (duration) or count-based (total ops). The
 runner drains in-flight requests at termination, then returns all recorded
 OpResults.
 
-Open-model (arrival-rate driven) behavior shares this same runner: a Scenario
-expresses inter-arrival via `Op.delay`, so an open scenario is just a plan
-whose delays follow an arrival process. Congestion policy for the open model
-(rejection under overload) is handled at the Scenario/runner boundary and
-recorded as status="rejected".
+Open-model (arrival-rate driven) behavior shares this same runner: arriving
+sessions each consume a bounded number of ops from the Scenario plan (the
+op mix is owned by the scenario, not a runner-level weight). Inter-arrival
+is a Poisson process; congestion policy (rejection under overload) is
+enforced by a bounded queue on the global concurrency cap and recorded as
+status="rejected".
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 from typing import Any
 
@@ -67,12 +69,23 @@ class LoadRunner:
             await self._preingest(users)
 
         self._start_time = time.monotonic()
+        # deadline is None for pure count-based closed runs (no time bound); the
+        # open model always has a duration (validated in RunConfig).
         deadline = (
             self._start_time + self.config.duration
             if self.config.duration > 0
             else None
         )
 
+        if self.config.model == "open":
+            assert deadline is not None  # validated by RunConfig
+            await self._open_loop(users, deadline)
+        else:
+            await self._closed_loop(users, deadline)
+
+        return self.recorder.raw()
+
+    async def _closed_loop(self, users: list[UserId], deadline: float) -> None:
         tasks = []
         for i, user in enumerate(users):
             # Staggered start for ramp-up: user i starts at i*ramp_step.
@@ -80,13 +93,127 @@ class LoadRunner:
             tasks.append(
                 asyncio.create_task(self._user_loop(user, start_delay, deadline))
             )
-
-        # Time-based stop signal.
         if deadline is not None:
             asyncio.create_task(self._timer(deadline))
-
         await asyncio.gather(*tasks, return_exceptions=True)
-        return self.recorder.raw()
+
+    async def _open_loop(self, users: list[UserId], deadline: float) -> None:
+        """Open model: a Poisson arrival process spawns user sessions, each
+        running a bounded number of ops then completing. Concurrency is
+        emergent (a function of arrival rate vs. service rate).
+
+        The fixed pool of `users` provides tenant identities; arriving sessions
+        draw users round-robin so per-user state already exists. Each arriving
+        session is a coroutine; the loop keeps spawning until the deadline."""
+        rng = random.Random(self.config.seed)
+        rate = self.config.arrival_rate
+        session_tasks: list[asyncio.Task] = []
+        next_user = 0
+
+        # Always run the timer to honor the deadline even if all sessions are
+        # short; the arrival generator stops at the deadline.
+        asyncio.create_task(self._timer(deadline))
+
+        t = self._start_time
+        while not self._should_stop():
+            # Inter-arrival ~ Exponential(rate).
+            gap = rng.expovariate(rate)
+            t += gap
+            now = time.monotonic()
+            if t > deadline:
+                break
+            wait = max(0.0, t - now)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            if self._should_stop():
+                break
+            user = users[next_user % len(users)]
+            next_user += 1
+            session_tasks.append(
+                asyncio.create_task(self._open_session(user, deadline))
+            )
+
+        # Let in-flight sessions finish (bounded by session_ops, so finite).
+        if session_tasks:
+            await asyncio.gather(*session_tasks, return_exceptions=True)
+
+    async def _open_session(
+        self, user: UserId, deadline: float
+    ) -> None:
+        """One arriving user's session: a bounded number of ops then exit.
+
+        The op mix comes from the scenario's plan (same interface as the
+        closed model); we consume up to `session_ops` ops from it. Each op
+        acquires a global slot with a bounded queue; if the queue is full the
+        op is rejected (status='rejected') rather than executed."""
+        n_ops = self.config.session_ops
+        rng_state = {"seed": self.config.seed, "user": user}
+        plan = self.scenario.plan(user, self.dataset, rng_state)
+        for _ in range(n_ops):
+            if self._should_stop() or time.monotonic() >= deadline:
+                return
+            try:
+                op = next(plan)
+            except StopIteration:
+                return
+            if op.delay > 0:
+                await asyncio.sleep(min(op.delay, self._remaining_until(deadline)))
+                if self._should_stop() or time.monotonic() >= deadline:
+                    return
+            acquired = await self._acquire_slot_bounded()
+            if not acquired:
+                await self._record_rejected(op, user)
+                continue
+            try:
+                await self._execute(user, op)
+            finally:
+                self._release_slot()
+
+    async def _acquire_slot_bounded(self) -> bool:
+        """Try to take a global concurrency slot, queuing up to queue_bound.
+
+        Returns True if a slot was acquired, False if rejected (queue full).
+        When there is no global cap, always succeeds."""
+        if self._global_sem is None:
+            return True
+        bound = self.config.queue_bound
+        # Try-acquire loop honoring a soft queue bound.
+        waited = 0.0
+        step = 0.005
+        while True:
+            if self._global_sem.locked() and self._inflight() >= (
+                self.config.global_concurrency + bound
+            ):
+                return False
+            if self._global_sem.locked():
+                await asyncio.sleep(step)
+                waited += step
+                continue
+            await self._global_sem.acquire()
+            return True
+
+    def _inflight(self) -> int:
+        # Approximate in-flight = capacity - available permits.
+        if self._global_sem is None:
+            return 0
+        return self.config.global_concurrency - self._global_sem._value
+
+    async def _record_rejected(self, op: Op, user: UserId) -> None:
+        now = time.time()
+        result = OpResult(
+            type=op.type,
+            user_id=user,
+            started_at=now,
+            ended_at=now,
+            status="rejected",
+            error_kind="queue_full",
+            n_items=0,
+        )
+        await self.recorder.record(result)
+
+    def _release_slot(self) -> None:
+        if self._global_sem is not None:
+            self._global_sem.release()
 
     async def _preingest(self, users: list[UserId]) -> None:
         """Ingest a fraction of each user's memory stream, concurrently across
