@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.so
+
+# Environments
+.venv/
+venv/
+env/
+.env
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.dmypy.json
+dmypy.json
+
+# LTM100 outputs (per-run artifacts, not source)
+results/
+output/
+*.ndjson
+!examples/**/*.ndjson
+
+# Datasets / data caches (downloaded at runtime, not committed)
+data/
+datasets/raw/
+*.jsonl.cache
+.huggingface/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
