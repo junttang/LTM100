@@ -24,6 +24,11 @@ class RunConfig:
     global_concurrency: int = 0
     # Warm-up seconds excluded from metrics (results recorded but filtered out).
     warmup: float = 0.0
+    # Pre-ingest each user's memory stream before the measured run so search
+    # scenarios run against populated memory. Excluded from metrics.
+    preingest: bool = False
+    # Fraction of each user's memory stream to pre-ingest (1.0 = all).
+    preingest_fraction: float = 1.0
     # Ramp-up seconds over which users start (staggered, avoids thundering herd).
     rampup: float = 0.0
     # Delete per-user state on exit.

@@ -174,3 +174,46 @@ def test_config_requires_termination():
         RunConfig(users=1)
     with pytest.raises(ValueError):
         RunConfig(users=0, ops=1)
+
+
+@pytest.mark.asyncio
+async def test_preingest_populates_memory_before_measure():
+    """preingest=True ingests memories (out of metrics) so search-load finds them."""
+    ds = FakeDataset(n_memories=20)
+    backend = FakeBackend()
+    cfg = RunConfig(users=2, ops=6, seed=0, preingest=True)
+    runner = LoadRunner(client=backend, dataset=ds, scenario=SearchLoad(), config=cfg)
+    results = await runner.run()
+    # Pre-ingest happened before measured searches: each user has memories.
+    # Map recorded results' searches to users; each search user had ingested.
+    search_users = [r.user_id for r in results]
+    assert set(search_users) <= {"u0", "u1"}
+    # The backend stored items for each user during preingest.
+    add_users = {u for u, _ in backend.adds}
+    assert "u0" in add_users and "u1" in add_users
+    # And the measured run recorded only searches (not the preingest adds).
+    summary = runner.recorder.summary()
+    assert set(summary["by_op"]) == {"search"}
+
+
+@pytest.mark.asyncio
+async def test_preingest_fraction_limits_items():
+    ds = FakeDataset(n_memories=100)
+    backend = FakeBackend()
+    cfg = RunConfig(users=1, ops=2, seed=0, preingest=True, preingest_fraction=0.1)
+    runner = LoadRunner(client=backend, dataset=ds, scenario=SearchLoad(), config=cfg)
+    await runner.run()
+    # ~10 of 100 memories ingested.
+    total_items = sum(n for _, n in backend.adds)
+    assert 5 <= total_items <= 15
+
+
+@pytest.mark.asyncio
+async def test_preingest_off_by_default():
+    ds = FakeDataset(n_memories=20)
+    backend = FakeBackend()
+    cfg = RunConfig(users=1, ops=3, seed=0)  # preingest defaults False
+    runner = LoadRunner(client=backend, dataset=ds, scenario=SearchLoad(), config=cfg)
+    await runner.run()
+    # No preingest adds, only the measured searches (which find nothing).
+    assert backend.adds == []

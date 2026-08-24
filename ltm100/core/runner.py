@@ -61,6 +61,11 @@ class LoadRunner:
         if self.config.global_concurrency > 0:
             self._global_sem = asyncio.Semaphore(self.config.global_concurrency)
 
+        # Optional pre-ingest: fill each user's memory before measuring so
+        # search scenarios run against populated memory. Excluded from metrics.
+        if self.config.preingest:
+            await self._preingest(users)
+
         self._start_time = time.monotonic()
         deadline = (
             self._start_time + self.config.duration
@@ -82,6 +87,31 @@ class LoadRunner:
 
         await asyncio.gather(*tasks, return_exceptions=True)
         return self.recorder.raw()
+
+    async def _preingest(self, users: list[UserId]) -> None:
+        """Ingest a fraction of each user's memory stream, concurrently across
+        users, with the global concurrency cap applied. Not recorded."""
+        frac = max(0.0, min(self.config.preingest_fraction, 1.0))
+
+        async def ingest_one(user: UserId) -> None:
+            items = list(self.dataset.memory_stream(user))
+            if frac < 1.0:
+                keep = max(1, int(round(frac * len(items))))
+                items = items[:keep]
+            batch = getattr(self.client, "add_batch_size", 50)
+            for start in range(0, len(items), batch):
+                await self.client.add(user, items[start : start + batch])
+
+        sem = self._global_sem
+
+        async def guarded(user: UserId) -> None:
+            if sem is not None:
+                async with sem:
+                    await ingest_one(user)
+            else:
+                await ingest_one(user)
+
+        await asyncio.gather(*[guarded(u) for u in users], return_exceptions=True)
 
     def _ramp_delay(self, index: int, total: int) -> float:
         if self.config.rampup <= 0 or total <= 1:

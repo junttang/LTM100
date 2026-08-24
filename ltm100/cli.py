@@ -33,6 +33,8 @@ def _build_run_config(args: argparse.Namespace) -> RunConfig:
         global_concurrency=args.global_concurrency,
         warmup=args.warmup,
         rampup=args.rampup,
+        preingest=args.preingest,
+        preingest_fraction=args.preingest_fraction,
         delete_on_exit=not args.no_delete_on_exit,
     )
 
@@ -111,6 +113,13 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--ops", type=int, default=0, help="total ops cap (0=off)")
     run.add_argument("--global-concurrency", type=int, default=0, help="max in-flight")
     run.add_argument("--warmup", type=float, default=0.0, help="warmup seconds")
+    run.add_argument("--preingest", action="store_true", help="pre-ingest memories before run")
+    run.add_argument(
+        "--preingest-fraction",
+        type=float,
+        default=1.0,
+        help="fraction of each user's memories to pre-ingest",
+    )
     run.add_argument("--rampup", type=float, default=0.0, help="ramp-up seconds")
     run.add_argument("--output", default=None, help="output dir for reports")
     run.add_argument("--raw", action="store_true", help="also write raw.ndjson")
