@@ -246,6 +246,8 @@ its own (e.g. Prometheus) and is scraped separately.
 2. **Resolve adapters** — dataset + LTM client (+ transport).
 3. **Provision** (`LTMClient.setup`) — per-user tenants created. (out of measure)
 4. **Optional warm-up / pre-ingest** — fill memories; excluded from metrics.
+   (Not yet implemented in the runner; `search-load` currently needs memories
+   added by a prior `add-load` run. Implementing this is the next step.)
 5. **Measured run** — scenario drives users; MetricsRecorder collects.
 6. **Drain** — in-flight requests complete (or timeout).
 7. **Aggregate & report** — summary JSON/CSV + optional raw NDJSON.
@@ -293,24 +295,55 @@ ltm100/
   DESIGN.md          # this file
 ```
 
-## 12. Initial Baseline
+## 12. Initial Baseline (implemented)
 
-First concrete adapters, end-to-end:
-- Dataset: **LongMemEval** (`xiaowu0162/longmemeval-cleaned`, `longmemeval_s_cleaned`).
+First concrete adapters, end-to-end, **implemented and verified against a live
+MemMachine server (v0.3.10)** via a smoke run:
+- Dataset: **LongMemEval** (`xiaowu0162/longmemeval-cleaned`, `longmemeval_s_cleaned`),
+  loadable from HuggingFace **or** from a pre-downloaded local JSON file
+  (`path` option). A **Synthetic** adapter (`synthetic`) is also provided for
+  fast, dependency-free load testing.
 - Backend: **MemMachine** over **REST** (`/api/v2`), with
   `UserId → {org_id, project_id}` → `session_key = f"{org_id}/{project_id}"`.
-- Scenario: `add-load` → `search-load` → `add-search-mixed`.
+- Scenarios: `add-load`, `search-load`, `add-search-mixed` (closed model).
+- CLI: `ltm100 run`, `ltm100 cleanup`; reports: `summary.json`, `summary.csv`,
+  optional `raw.ndjson`.
 
-## 13. Open Questions (deferred to implementation)
+Verified: health, add/search, per-user isolation, count- and time-based
+termination, global concurrency cap, reproducibility (same seed), report
+generation, and cleanup (teardown delete). No code bugs found.
 
-- Exact async signatures of `LTMClient` / `DatasetAdapter` (Protocol vs ABC).
-- Open-model congestion policy details (queue bound, backpressure, rejection
-  semantics) and how rejections surface in metrics.
-- Whether per-user in-flight > 1 is parameterized on the Scenario or the
-  runner.
-- NDJSON streaming format and live-progress reporting shape.
-- Whether MCP transport needs a separate `Transport` impl or a thin client
-  wrapper (depends on the MCP SDK's request model at implementation time).
+### Known limitation: backend `types` is hardcoded
+
+The MemMachine adapter currently sends `types: ["episodic"]` for both add and
+search (semantic memory excluded to avoid LLM-based background-processing
+noise in load measurement). Making `types` configurable is a deferred TODO.
+
+### Known caveat: MemMachine `projects/list` is eventually consistent
+
+After `teardown(delete=True)` succeeds (server returns 204 and logs
+`Deleted session`), an immediate `projects/list` call may still show the
+project. It disappears shortly after. Cleanup verification must wait a moment
+or check delete response status, not trust an immediate list.
+
+## 13. Status of Open Questions
+
+Resolved during implementation:
+- Async signatures: `Protocol` for `LTMClient` / `DatasetAdapter` / `Transport`;
+  concrete classes (`MemMachineClient`, `LongMemEvalAdapter`, `RestTransport`).
+- Per-user in-flight = 1 is enforced in the runner; >1 is a future runner
+  parameter (not Scenario-level).
+- NDJSON raw format: per-request `{op_type, user_id, started_at, ended_at,
+  latency_ms, status, error_kind, n_items}`.
+
+Still open / next work:
+- **Warm-up pre-ingest** (§8 step 4): the runner does not yet pre-ingest before
+  the measured search phase — `search-load` needs memories added first.
+  Implementing this is the next step.
+- **Open model + congestion policy**: arrival-rate scenario with bounded queue
+  / rejection semantics, surfaced as `status="rejected"`. Deferred.
+- **MCP transport**: a second transport under the same `LTMClient` contract;
+  depends on the MemMachine MCP server's request model. Deferred.
 
 ## 14. Glossary
 
