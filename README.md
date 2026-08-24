@@ -17,10 +17,41 @@ See [`DESIGN.md`](./DESIGN.md) for the full design.
 Early development. Datasets and LTM backends are pluggable; the initial
 baseline is LongMemEval + MemMachine (REST).
 
-## Quick start (planned)
+## Install
 
 ```sh
-pip install -e .
+pip install -e ".[dev]"
+# To use the LongMemEval adapter (HF datasets) also:
+pip install -e ".[datasets]"
+```
+
+## Run
+
+```sh
+# Edit examples/memmachine.yaml to point at your MemMachine server, then:
 ltm100 run --config examples/memmachine.yaml \
-    --users 50 --scenario add-search-mixed --duration 60 --seed 0
+    --scenario add-search-mixed --users 50 --duration 60 --seed 0
+```
+
+Reports (summary JSON/CSV, optional raw NDJSON) are written to `--output`.
+
+## Cleanup per-user state
+
+```sh
+ltm100 cleanup --config examples/memmachine.yaml --users 50
+```
+
+## Pluggable axes
+
+- **Dataset adapters** (`ltm100/adapters/datasets/`): LongMemEval today.
+- **Backend adapters** (`ltm100/adapters/backends/`): MemMachine (REST) today.
+- **Transports** (`ltm100/adapters/transports/`): REST today; MCP planned under
+  the same `LTMClient` contract.
+
+See [`DESIGN.md`](./DESIGN.md) for the adapter contracts.
+
+## Tests
+
+```sh
+pytest -q
 ```
