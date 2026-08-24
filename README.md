@@ -76,12 +76,21 @@ are replicated so N is the driven user count, independent of dataset size.
 A scenario turns each user's dataset streams into a sequence of operations.
 The op mix (add vs search) is owned by the scenario for both load models.
 
-| Scenario | Load model | What it tests |
-| --- | --- | --- |
-| `add-load` | closed | **Storage throughput.** Each user streams its full memory stream back-to-back. Max add pressure on the server; no search. |
-| `search-load` | closed | **Search throughput & latency.** Each user loops its query stream repeatedly. Assumes memories were pre-ingested (use `--preingest`). No adds during the measured run. |
-| `add-search-mixed` | closed | **Mixed workload.** Each user ingests its memories but issues a search every `search_every` adds. Realistic mix within a single user's lifetime. |
-| `realistic` | open | **Arrival-driven load.** A Poisson process spawns arriving user sessions, each running a bounded number of search-weighted ops. Tests emergent concurrency, congestion, and rejection under overload. |
+| | add-load | search-load | add-search-mixed | realistic |
+| --- | --- | --- | --- | --- |
+| load model | closed | closed | closed | open |
+| ops | add only | search only | add + search interleaved | search-weighted add + search |
+| user lifetime | finite (stream exhausted) | infinite (loop) | finite (stream exhausted) | per-session (arrival → `session_ops`) |
+| concurrency | N fixed, parallel add | N fixed, parallel search | N fixed, mixed | emergent (Poisson arrivals) |
+| precondition | none | preingest required | none | preingest recommended |
+| termination | duration/ops | duration/ops | duration/ops | duration required |
+| op scheduling | back-to-back | think 0–0.02s | back-to-back | think 0–0.05s |
+| key output | write throughput | read latency | read/write mix | rejection/congestion metrics |
+
+For a detailed, per-scenario walkthrough — exactly how a virtual user
+behaves, how many run, the concurrency model, and the `add`/`search`
+operations at the backend-contract level (with MemMachine specifics
+isolated to one section) — see [`docs/scenarios.md`](./docs/scenarios.md).
 
 ## Load models
 
