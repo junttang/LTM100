@@ -31,6 +31,10 @@ pip install -e ".[datasets]"
 # Edit examples/memmachine.yaml to point at your MemMachine server, then:
 ltm100 run --config examples/memmachine.yaml \
     --scenario add-search-mixed --users 50 --duration 60 --seed 0
+
+# Fast load test with no external data download:
+ltm100 run --config examples/synthetic.yaml \
+    --scenario add-search-mixed --users 20 --duration 30 --seed 0
 ```
 
 Reports (summary JSON/CSV, optional raw NDJSON) are written to `--output`.

@@ -6,6 +6,9 @@
 
 dataset:
   name: longmemeval
+  # Option A: load from a pre-downloaded local JSON file (no HF download).
+  path: ~/longmemeval/longmemeval_s_cleaned.json
+  # Option B (comment out `path`): download from HuggingFace instead.
   split: longmemeval_s_cleaned
   length: 100            # cap number of dataset samples (and thus max unique users)
 

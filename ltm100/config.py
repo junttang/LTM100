@@ -26,6 +26,7 @@ import yaml
 
 from ltm100.adapters.backends.memmachine import MemMachineClient
 from ltm100.adapters.datasets.longmemeval import LongMemEvalAdapter
+from ltm100.adapters.datasets.synthetic import SyntheticAdapter
 from ltm100.common import DatasetAdapter, LTMClient
 
 
@@ -68,6 +69,7 @@ def _parse_config(raw: dict[str, Any]) -> BenchmarkConfig:
 
 _DATASET_REGISTRY: dict[str, type] = {
     LongMemEvalAdapter.name: LongMemEvalAdapter,
+    SyntheticAdapter.name: SyntheticAdapter,
 }
 
 _BACKEND_REGISTRY: dict[str, type] = {

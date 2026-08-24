@@ -6,6 +6,8 @@ in-memory synthetic dataset shaped like a LongMemEval sample.
 
 from __future__ import annotations
 
+import pytest
+
 from ltm100.adapters.datasets.longmemeval import LongMemEvalAdapter
 
 
@@ -95,3 +97,41 @@ def test_reproducible_user_mapping():
     a = adapter.users(10, seed=42)
     b = adapter.users(10, seed=42)
     assert a == b
+
+
+def test_loads_from_local_path(tmp_path):
+    import json
+
+    p = tmp_path / "lme.json"
+    p.write_text(json.dumps(_synthetic_records(4)))
+    adapter = LongMemEvalAdapter(path=str(p), length=2)
+    users = adapter.users(3, seed=0)
+    assert len(users) == 3
+    items = list(adapter.memory_stream(users[0]))
+    assert items  # has memories
+    queries = list(adapter.query_stream(users[0]))
+    assert len(queries) == 1
+
+
+def test_local_path_respects_length(tmp_path):
+    import json
+
+    p = tmp_path / "lme.json"
+    p.write_text(json.dumps(_synthetic_records(10)))
+    adapter = LongMemEvalAdapter(path=str(p), length=3)
+    users = adapter.users(100, seed=0)
+    # Only 3 distinct samples back the 100 users.
+    backing = set()
+    for u in users:
+        backing.add(tuple(it.content for it in adapter.memory_stream(u)))
+    assert len(backing) <= 3
+
+
+def test_local_path_rejects_non_list(tmp_path):
+    import json
+
+    p = tmp_path / "bad.json"
+    p.write_text(json.dumps({"not": "a list"}))
+    adapter = LongMemEvalAdapter(path=str(p))
+    with pytest.raises(TypeError):
+        adapter.users(1, seed=0)

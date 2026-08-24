@@ -70,10 +70,15 @@ class LongMemEvalAdapter:
         split: str = "longmemeval_s_cleaned",
         length: int | None = None,
         cache_dir: str | None = None,
+        path: str | None = None,
     ) -> None:
+        """If `path` is given, load directly from that local JSON file instead
+        of downloading from HuggingFace. `split`/`cache_dir` are ignored when
+        `path` is set."""
         self.split = split
         self.length = length
         self.cache_dir = cache_dir
+        self.path = path
         self._records: list[dict[str, Any]] | None = None
 
     # -- loading -----------------------------------------------------------
@@ -82,6 +87,22 @@ class LongMemEvalAdapter:
         if self._records is not None:
             return self._records
 
+        if self.path:
+            self._records = self._load_local(self.path)
+            return self._records
+
+        self._records = self._load_hf()
+        return self._records
+
+    def _load_local(self, path: str) -> list[dict[str, Any]]:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        if not isinstance(raw, list):
+            raise TypeError(f"Expected list data in {path}, got {type(raw).__name__}.")
+        records = raw[: self.length] if self.length is not None else raw
+        return self._normalize(records)
+
+    def _load_hf(self) -> list[dict[str, Any]]:
         split_file = (
             self.split if self.split.endswith(".json") else f"{self.split}.json"
         )
@@ -116,6 +137,11 @@ class LongMemEvalAdapter:
                 )
             records = raw[: self.length] if self.length is not None else raw
 
+        self._records = self._normalize(records)
+        return self._records
+
+    @staticmethod
+    def _normalize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         normalized: list[dict[str, Any]] = []
         for record in records:
             if not isinstance(record, dict):
@@ -126,9 +152,7 @@ class LongMemEvalAdapter:
             rec.setdefault("question_type", "unknown")
             rec.setdefault("haystack_sessions", [])
             normalized.append(rec)
-
-        self._records = normalized
-        return self._records
+        return normalized
 
     # -- DatasetAdapter ----------------------------------------------------
 
