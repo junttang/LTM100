@@ -95,7 +95,10 @@ class LongMemEvalAdapter:
         return self._records
 
     def _load_local(self, path: str) -> list[dict[str, Any]]:
-        with open(path, "r", encoding="utf-8") as f:
+        # Expand `~` so configs can use a home-relative path (e.g.
+        # `path: ~/longmemeval/longmemeval_s_cleaned.json`).
+        resolved = str(Path(path).expanduser())
+        with open(resolved, "r", encoding="utf-8") as f:
             raw = json.load(f)
         if not isinstance(raw, list):
             raise TypeError(f"Expected list data in {path}, got {type(raw).__name__}.")

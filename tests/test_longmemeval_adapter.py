@@ -135,3 +135,16 @@ def test_local_path_rejects_non_list(tmp_path):
     adapter = LongMemEvalAdapter(path=str(p))
     with pytest.raises(TypeError):
         adapter.users(1, seed=0)
+
+
+def test_local_path_expands_tilde(tmp_path, monkeypatch):
+    """A home-relative path (`~/...`) is expanded against the home dir."""
+    import json
+
+    p = tmp_path / "lme_tilde.json"
+    p.write_text(json.dumps(_synthetic_records(2)))
+    # Point HOME at tmp_path so `~` resolves there.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    adapter = LongMemEvalAdapter(path="~/lme_tilde.json", length=2)
+    users = adapter.users(2, seed=0)
+    assert len(users) == 2
