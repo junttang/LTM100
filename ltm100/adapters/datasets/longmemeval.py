@@ -4,7 +4,12 @@ LongMemEval (xiaowu0162/longmemeval-cleaned) provides, per sample, a set of
 "haystack" conversation sessions (the long context) plus a question/answer.
 We map each sample to one virtual user:
   - the sample's haystack turn contents -> that user's memory_stream (add)
-  - the sample's question/answer       -> that user's query_stream (search)
+  - the sample's haystack_sessions structure -> that user's turn_stream
+    (user/assistant turns, for chat-replay's recall-before-answer workload)
+
+Search queries are content-derived by the scenarios from the user's own
+memory/turn content, so the sample's separate evaluation question is not
+exposed as a search stream here.
 
 When `n_users` exceeds the number of available samples, samples are replicated
 onto additional virtual users (different user ids, same underlying content).
@@ -22,7 +27,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterator
 
-from ltm100.common import DatasetAdapter, MemoryItem, QueryItem, Turn, UserId
+from ltm100.common import DatasetAdapter, MemoryItem, Turn, UserId
 
 
 def _split_chunks(text: str, max_chars: int = 3000) -> list[str]:
@@ -214,21 +219,6 @@ class LongMemEvalAdapter:
                     continue
                 items = [MemoryItem(content=c, producer=user) for c in chunks]
                 yield Turn(role=role, items=items)
-
-    def query_stream(self, user: UserId) -> Iterator[QueryItem]:
-        sample = self._sample_for_user(user)
-        question = str(sample.get("question", "")).strip()
-        if not question:
-            return
-        yield QueryItem(
-            query=question,
-            top_k=20,
-            expected={
-                "answer": sample.get("answer", ""),
-                "question_type": sample.get("question_type", "unknown"),
-                "question_id": sample.get("question_id", ""),
-            },
-        )
 
 
 __all__ = ["LongMemEvalAdapter", "_split_chunks", "_collect_turn_contents"]

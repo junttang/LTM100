@@ -23,6 +23,8 @@ dmypy.json
 # LTM100 outputs (per-run artifacts, not source)
 results/
 output/
+out/
+out_smoke/
 *.ndjson
 !examples/**/*.ndjson
 

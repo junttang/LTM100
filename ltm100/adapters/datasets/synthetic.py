@@ -4,9 +4,9 @@ Generates deterministic per-user content from a seed, so a run can be driven
 without any external dataset download. Useful for smoke runs, regression, and
 comparing backends on identical synthetic load.
 
-Each virtual user gets:
-  - `memories_per_user` memory items (content is deterministic per user+index)
-  - `queries_per_user` search queries
+Each virtual user gets `memories_per_user` memory items (content is
+deterministic per user+index). Search queries are content-derived by the
+scenarios from these memory items, so no separate query stream is exposed.
 
 It is a real DatasetAdapter (registered as "synthetic"), not a test fixture.
 """
@@ -16,7 +16,7 @@ from __future__ import annotations
 import random
 from typing import Iterator
 
-from ltm100.common import DatasetAdapter, MemoryItem, QueryItem, UserId
+from ltm100.common import DatasetAdapter, MemoryItem, UserId
 
 
 class SyntheticAdapter:
@@ -27,11 +27,9 @@ class SyntheticAdapter:
     def __init__(
         self,
         memories_per_user: int = 100,
-        queries_per_user: int = 5,
         content_chars: int = 200,
     ) -> None:
         self.memories_per_user = max(1, memories_per_user)
-        self.queries_per_user = max(1, queries_per_user)
         self.content_chars = max(1, content_chars)
 
     def _user_rng(self, user: UserId, seed: int) -> random.Random:
@@ -48,11 +46,6 @@ class SyntheticAdapter:
         for i in range(self.memories_per_user):
             content = f"{user} memory {i}: " + _filler(rng, self.content_chars)
             yield MemoryItem(content=content, producer=user)
-
-    def query_stream(self, user: UserId) -> Iterator[QueryItem]:
-        rng = self._user_rng(user + "::qry", 0)
-        for i in range(self.queries_per_user):
-            yield QueryItem(query=f"{user} query {i}: " + _filler(rng, 40))
 
 
 def _filler(rng: random.Random, n: int) -> str:

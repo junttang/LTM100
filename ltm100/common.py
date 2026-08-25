@@ -32,7 +32,9 @@ class QueryItem:
     """A single search query.
 
     `expected` fields (gold answer, facts, ...) are kept only for optional
-    traceability/debugging — they are NEVER scored by LTM100.
+    traceability/debugging — they are NEVER scored by LTM100. In practice the
+    load scenarios derive `query` from the user's own memory content
+    (see `ltm100/core/scenarios.py`), not from a dataset evaluation question.
     """
 
     query: str
@@ -74,6 +76,13 @@ class DatasetAdapter(Protocol):
     The adapter knows nothing about backends or transports. It is responsible
     for mapping virtual users onto dataset samples, including replication when
     `n_users` exceeds the number of available samples.
+
+    Search queries are **content-derived** by the scenarios (built from a
+    user's `memory_stream` items, or from `turn_stream` user-turn content for
+    `chat-replay`), not provided by the adapter. There is therefore no
+    `query_stream` on this contract; the adapter only supplies what gets added
+    (`memory_stream`) and, for dialogue datasets, the conversation structure
+    (`turn_stream`).
     """
 
     name: str
@@ -84,10 +93,6 @@ class DatasetAdapter(Protocol):
 
     def memory_stream(self, user: UserId) -> Iterator[MemoryItem]:
         """Yield add payloads for this user, in ingestion order."""
-        ...
-
-    def query_stream(self, user: UserId) -> Iterator[QueryItem]:
-        """Yield search queries for this user. May repeat or interleave."""
         ...
 
     def turn_stream(self, user: UserId) -> Iterator[Turn]:

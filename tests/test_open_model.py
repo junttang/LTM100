@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 
-from ltm100.common import MemoryItem, QueryItem, ResultItem, UserId
+from ltm100.common import MemoryItem, ResultItem, UserId
 from ltm100.core.config import RunConfig
 from ltm100.core.runner import LoadRunner
 from ltm100.core.scenarios import Realistic
@@ -30,10 +30,6 @@ class FakeDataset:
         for i in range(self.n_memories):
             yield MemoryItem(content=f"{user}-mem-{i}", producer=user)
 
-    def query_stream(self, user: UserId):
-        yield QueryItem(query=f"{user}-q0")
-        yield QueryItem(query=f"{user}-q1")
-
 
 class SlowBackend:
     """Backend whose add/search take a fixed delay to create congestion."""
@@ -43,6 +39,7 @@ class SlowBackend:
     def __init__(self, delay: float = 0.1) -> None:
         self.delay = delay
         self.calls = 0
+        self.searches: list[tuple[str, str]] = []  # (user, query string)
 
     async def setup(self, users):
         return
@@ -55,6 +52,7 @@ class SlowBackend:
     async def search(self, user, query):
         self.calls += 1
         await asyncio.sleep(self.delay)
+        self.searches.append((user, query.query))
         return [ResultItem(content="hit")]
 
     async def teardown(self, users, *, delete):
@@ -103,6 +101,9 @@ async def test_open_model_mixes_add_and_search():
     summary = runner.recorder.summary()
     assert "search" in summary["by_op"]
     assert "add" in summary["by_op"]
+    # Search queries are content-derived from the user's own memories.
+    for user, q in backend.searches:
+        assert q.startswith(f"{user}-mem-")
 
 
 @pytest.mark.asyncio

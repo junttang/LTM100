@@ -113,11 +113,20 @@ class DatasetAdapter(Protocol):
     def memory_stream(self, user: UserId) -> Iterator[MemoryItem]:
         """Yield add payloads for this user (in ingestion order)."""
 
-    def query_stream(self, user: UserId) -> Iterator[QueryItem]:
-        """Yield search queries for this user (may repeat / interleave)."""
+    def turn_stream(self, user: UserId) -> Iterator[Turn]:
+        """Optional: structured conversation turns, for chat-replay."""
 ```
 
 - `MemoryItem`: content + optional metadata (timestamp, producer, role).
+- `Turn`: `(role, items)` for dialogue datasets (optional; used by
+  `chat-replay`).
+- **No `query_stream`.** Search queries are **content-derived** by the
+  scenarios — built from the user's own `memory_stream` items (for
+  `search-load` / `realistic`) or from `turn_stream` user-turn content (for
+  `chat-replay`). A dataset evaluation question is therefore not exposed as
+  a search stream; this keeps the query pool large (one query per stored
+  unit) so cycling does not naively repeat a single query and warm a server
+  result cache.
 - `QueryItem`: query string + optional expected fields (gold answer etc. are
   **not** scored — kept only for optional traceability/debugging).
 - **Replication by default**: `n_users` is independent of dataset size; an
@@ -125,8 +134,8 @@ class DatasetAdapter(Protocol):
   replication otherwise). The virtual-user count we drive is what matters,
   not the dataset's own user count.
 - LongMemEval mapping: a sample's `haystack_sessions` → one user's
-  `memory_stream`; the sample's `question/answer` → that user's
-  `query_stream`.
+  `memory_stream` (flattened, chunked <=3000 chars) **and** `turn_stream`
+  (per-turn role + chunked items, for chat-replay).
 
 ### 4.2 LTMClient (backend adapter)
 
@@ -204,21 +213,24 @@ class Scenario(Protocol):
 ```
 
 Initial scenarios (easiest first):
-1. **`add-load`**: each user streams `memory_stream` back-to-back, max
-   concurrency. Pure storage throughput.
-2. **`search-load`**: users run pre-ingested `query_stream` repeatedly. Pure
-   search throughput/latency.
-3. **`add-search-mixed`**: interleaved add & search per user.
-4. **`realistic`** (open model): per-user inter-arrival, bounded session
-   length, op mix weighted toward search with occasional adds.
+1. **`add-load`**: each user streams `memory_stream` back-to-back (wrapping),
+   max concurrency. Pure storage throughput.
+2. **`search-load`**: users run pre-ingested, content-derived searches
+   forever. Pure search throughput/latency.
+3. **`chat-replay`**: replay a chatbot-with-LTM workload over the dataset's
+   `turn_stream` (recall before a user turn, then ingest the turn), with a
+   configurable recall cadence (`search_every`).
+4. **`realistic`**: per-user inter-arrival, bounded session length, op mix
+   weighted toward search with occasional adds. The lightweight congestion
+   probe — needs no `turn_stream`, so it works with the synthetic dataset.
 
-Scenarios 1–3 use the closed model; scenario 4 uses the open model.
-
-The op mix (add vs search) is owned by the Scenario plan for **both** models
-— the open model's arriving sessions consume a bounded number of ops from
-the same `plan()` interface the closed model loops over. There is no
-runner-level op-mix weight; `realistic` takes a `search_weight` constructor
-param instead.
+Every scenario runs under **both** closed and open load models. The op mix
+(add vs search) is owned by the Scenario plan for **both** models — the open
+model's arriving sessions consume a bounded number of ops from the same
+`plan()` interface the closed model loops over. There is no runner-level
+op-mix weight; `realistic` takes a `search_weight` constructor param instead.
+All scenario plans are **infinite** (they wrap their stream), so a duration
+run sustains load instead of going idle when a finite stream is exhausted.
 
 ## 7. Metrics
 
@@ -314,7 +326,9 @@ MemMachine server (v0.3.10)** via a smoke run:
   fast, dependency-free load testing.
 - Backend: **MemMachine** over **REST** (`/api/v2`), with
   `UserId → {org_id, project_id}` → `session_key = f"{org_id}/{project_id}"`.
-- Scenarios: `add-load`, `search-load`, `add-search-mixed` (closed model).
+- Scenarios: `add-load`, `search-load` (closed model). (Later: `chat-replay`
+  and `realistic`; `add-search-mixed` was retired — its `search_every`
+  cadence moved to `chat-replay`.)
 - CLI: `ltm100 run`, `ltm100 cleanup`; reports: `summary.json`, `summary.csv`,
   optional `raw.ndjson`.
 

@@ -21,13 +21,6 @@ def test_memory_stream_count():
     assert all(it.producer == users[0] for it in items)
 
 
-def test_query_stream_count():
-    ds = SyntheticAdapter(queries_per_user=4)
-    users = ds.users(1, seed=0)
-    queries = list(ds.query_stream(users[0]))
-    assert len(queries) == 4
-
-
 def test_reproducible_content_across_calls():
     ds = SyntheticAdapter(memories_per_user=10)
     users = ds.users(1, seed=0)
@@ -48,7 +41,7 @@ def test_registry_resolves_synthetic(tmp_path):
     import yaml
 
     cfg = {
-        "dataset": {"name": "synthetic", "memories_per_user": 12, "queries_per_user": 3},
+        "dataset": {"name": "synthetic", "memories_per_user": 12},
         "backend": {"name": "memmachine", "base_url": "http://localhost:8080"},
     }
     p = tmp_path / "c.yaml"

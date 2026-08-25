@@ -71,15 +71,6 @@ def test_memory_stream_chunks_long_content():
     assert any(len(it.content) > 2000 for it in items)
 
 
-def test_query_stream_yields_one_query():
-    adapter = _make_adapter(_synthetic_records(1))
-    users = adapter.users(1, seed=0)
-    queries = list(adapter.query_stream(users[0]))
-    assert len(queries) == 1
-    assert queries[0].query.startswith("What is fact")
-    assert queries[0].expected["answer"] == "answer-0"
-
-
 def test_replicated_users_have_consistent_backing_sample():
     adapter = _make_adapter(_synthetic_records(2))
     # Two users that map to the same sample should see the same memory.
@@ -109,8 +100,6 @@ def test_loads_from_local_path(tmp_path):
     assert len(users) == 3
     items = list(adapter.memory_stream(users[0]))
     assert items  # has memories
-    queries = list(adapter.query_stream(users[0]))
-    assert len(queries) == 1
 
 
 def test_local_path_respects_length(tmp_path):

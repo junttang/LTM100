@@ -15,21 +15,22 @@ For the full design, see [`DESIGN.md`](./DESIGN.md).
 
 ## Status
 
-Version: **v0.2.0** (see [Versioning](#versioning)).
+Version: **v0.3.0** (see [Versioning](#versioning)).
 
 Early development. Datasets and LTM backends are pluggable; the initial
 baseline is the LongMemEval dataset + the MemMachine backend over REST.
 
 Implemented:
-- Closed and open load models.
-- Scenarios: `add-load`, `search-load`, `add-search-mixed`, `chat-replay`,
-  `realistic`.
+- Closed and open load models (every scenario runs under both; see below).
+- Scenarios: `add-load`, `search-load`, `chat-replay`, `realistic`. All wrap
+  their data streams to sustain load for a duration run, and all search on
+  content-derived queries (from the user's own memories / conversation turns).
 - Congestion policy (bounded queue with rejection) for the open model.
 - Warm-up / pre-ingest before the measured run.
 - Datasets: LongMemEval (local file or HuggingFace), synthetic.
 - Backend: MemMachine (REST and MCP transports).
 - Configurable scenario parameters on the CLI (`--think`, `--search-every`,
-  `--add-batch`, `--search-weight`).
+  `--search-weight`).
 - Reports: summary JSON/CSV + optional raw NDJSON.
 
 Planned:
@@ -64,13 +65,14 @@ pick a dataset.
 ## Datasets
 
 - **`longmemeval`** — the LongMemEval-cleaned dataset. One sample's
-  `haystack_sessions` becomes a user's add stream; its `question/answer`
-  becomes the search stream. Loads from a local JSON file (`path:`) or, if
-  `path` is omitted, downloads the split from HuggingFace. `length:` caps the
-  number of samples.
+  `haystack_sessions` becomes a user's add stream; the same session structure
+  also drives `chat-replay`'s recall (user/assistant turns). Loads from a
+  local JSON file (`path:`) or, if `path` is omitted, downloads the split
+  from HuggingFace. `length:` caps the number of samples.
 - **`synthetic`** — deterministically generated per-user content from the
   seed. No download; ideal for fast, reproducible load tests. Tunable via
-  `memories_per_user`, `queries_per_user`, `content_chars`.
+  `memories_per_user`, `content_chars`. (No conversation turns, so
+  `chat-replay` is not usable with it.)
 
 When the virtual-user count exceeds the dataset's unique samples, samples
 are replicated so N is the driven user count, independent of dataset size.
@@ -84,15 +86,18 @@ content** — that comes from the dataset adapter:
   sample's haystack into <=3000-char chunks (one turn may yield several
   items); synthetic yields a fixed number of deterministic items. Items are
   stored as **episodic** memory (`producer` = the user id).
-- **search** operates on `dataset.query_stream(user)`: LongMemEval yields a
-  single query per sample (the `question`); synthetic yields a few. Search
-  scenarios cycle this finite query pool round-robin, with a small think
-  jitter so users drift out of lockstep. Gold answer fields (`expected`) are
-  carried for tracing only and are never scored — LTM100 measures load, not
-  recall. `chat-replay` is the exception: it derives each recall query from
-  the upcoming user turn's content via the dataset's optional
+- **search** queries are **content-derived**, not taken from a dataset
+  evaluation question. `search-load` and `realistic` build the query pool
+  from the user's own `memory_stream` items (one query per stored unit), so
+  the pool is large and cycling it does not naively repeat a single query
+  (which would warm a server result cache and understate latency). They
+  cycle the pool with a rotating per-pass offset and a small think jitter so
+  users drift out of lockstep. `chat-replay` instead derives each recall
+  query from the upcoming user turn's content via the dataset's
   `turn_stream(user)` (LongMemEval only), so recall is driven by the
-  conversation itself rather than `query_stream`.
+  conversation itself. LTM100 measures load, not recall — there are no
+  precision/recall metrics and gold `expected` fields, if any, are carried
+  for tracing only and never scored.
 
 See [`docs/scenarios.md`](./docs/scenarios.md) for the full per-scenario
 data-flow detail.
@@ -101,17 +106,22 @@ data-flow detail.
 
 A scenario turns each user's dataset streams into a sequence of operations.
 The op mix (add vs search) is owned by the scenario for both load models.
+**Every scenario runs under both load models** — closed (a fixed pool of
+looping users) and open (Poisson arrivals with a congestion/rejection
+policy). The scenario owns the op mix and data; the runner owns the consume
+schedule (think-time loop vs arrival-driven sessions). See [Load
+models](#load-models).
 
-| | add-load | search-load | add-search-mixed | chat-replay | realistic |
-| --- | --- | --- | --- | --- | --- |
-| load model | closed | closed | closed | closed | open |
-| ops | add only | search only | add + search interleaved | recall + add per turn | search-weighted add + search |
-| user lifetime | finite (stream exhausted) | infinite (loop) | finite (stream exhausted) | finite (dialogue replayed) | per-session (arrival → `session_ops`) |
-| concurrency | N fixed, parallel add | N fixed, parallel search | N fixed, mixed | N fixed, in-order replay | emergent (Poisson arrivals) |
-| precondition | none | preingest required | none | dataset with `turn_stream` | preingest recommended |
-| termination | duration/ops | duration/ops | duration/ops | duration/ops | duration required |
-| op scheduling | back-to-back | think 0–0.02s | back-to-back | think 0–0.05s | think 0–0.05s |
-| key output | write throughput | read latency | read/write mix | chatbot-LTM integration load | rejection/congestion metrics |
+| | add-load | search-load | chat-replay | realistic |
+| --- | --- | --- | --- | --- |
+| load model | closed + open | closed + open | closed + open | closed + open |
+| ops | add only | search only | recall + add per turn | search-weighted add + search |
+| user lifetime | wraps to sustain | wraps to sustain | wraps the dialogue | per-session (arrival → `session_ops`) |
+| concurrency | N fixed, parallel add | N fixed, parallel search | N fixed, in-order replay | emergent under open; N fixed under closed |
+| precondition | none | preingest required | dataset with `turn_stream` | preingest recommended |
+| termination | duration/ops | duration/ops | duration/ops | duration required (open) |
+| op scheduling | back-to-back | think 0–0.02s | think 0–0.05s | think 0–0.05s |
+| key output | write throughput | read latency | chatbot-LTM integration load | rejection/congestion metrics (open) |
 
 For a detailed, per-scenario walkthrough — exactly how a virtual user
 behaves, how many run, the concurrency model, and the `add`/`search`
@@ -122,7 +132,9 @@ isolated to one section) — see [`docs/scenarios.md`](./docs/scenarios.md).
 
 - **Closed** (`--model closed`, default): a fixed number of virtual users,
   each looping its scenario plan with in-flight = 1 per user. An optional
-  `--global-concurrency` cap bounds total in-flight ops.
+  `--global-concurrency` cap bounds total in-flight ops. Because every
+  scenario's plan wraps its data stream, a `--duration` run sustains load
+  instead of going idle once a finite stream is exhausted.
 - **Open** (`--model open`): users arrive per a Poisson process
   (`--arrival-rate`), each running `--session-ops` ops then leaving.
   Concurrency is emergent (a function of arrival rate vs service rate). A
@@ -157,27 +169,33 @@ ltm100 run --config examples/synthetic.yaml \
     --output out/search-load
 ```
 
-### Mixed workload (`add-search-mixed`, closed)
-
-Interleaved add and search per user, mirroring a single user's lifetime.
-
-```sh
-ltm100 run --config examples/synthetic.yaml \
-    --scenario add-search-mixed --users 50 --duration 60 --seed 0 \
-    --output out/mixed
-```
-
-### Chatbot-LTM integration (`chat-replay`, closed)
+### Chatbot-LTM integration (`chat-replay`)
 
 Replay a multi-turn dialogue as a chatbot-with-LTM would: before each user
 turn, recall (search) against the user's utterance, then ingest both the
-user and assistant turns. Requires a dataset with a `turn_stream`
-(LongMemEval, not synthetic); the run fails loudly otherwise.
+user and assistant turns. `--search-every N` throttles the recall cadence
+(default 1 = recall before every user turn; N>1 recalls only every Nth
+user turn). Requires a dataset with a `turn_stream` (LongMemEval, not
+synthetic); the run fails loudly otherwise. The dialogue wraps, so a
+`--duration` run replays it as many times as needed.
 
 ```sh
 ltm100 run --config examples/memmachine.yaml \
     --scenario chat-replay --users 10 --duration 60 --seed 0 \
     --output out/chat-replay
+```
+
+Run the same chatbot workload under realistic arrival timing: users arrive
+per a Poisson process and the open model's congestion policy applies (the
+recall cadence and turn content are unchanged) — see [Load
+models](#load-models).
+
+```sh
+ltm100 run --config examples/memmachine.yaml \
+    --scenario chat-replay --users 10 --duration 30 --seed 0 \
+    --model open --arrival-rate 2.0 --session-ops 12 \
+    --global-concurrency 8 --queue-bound 4 \
+    --output out/chat-replay-open
 ```
 
 ### Arrival-driven load with congestion (`realistic`, open)
@@ -215,8 +233,8 @@ the same load. (Requires `pip install -e ".[mcp]"`.)
 
 ```sh
 ltm100 run --config examples/memmachine-mcp.yaml \
-    --scenario add-search-mixed --users 20 --duration 30 --seed 0 \
-    --output out/mcp-mixed
+    --scenario chat-replay --users 20 --duration 30 --seed 0 \
+    --output out/mcp-chat
 ```
 
 ### Common flags
@@ -228,8 +246,8 @@ ltm100 run --config examples/memmachine-mcp.yaml \
 - `--rampup SECONDS`: stagger user start to avoid a thundering herd.
 - `--search-weight F`: (realistic) fraction of ops that are search (0..1).
 - `--think SECONDS`: (realistic, chat-replay) max think-time jitter per op.
-- `--search-every N`: (add-search-mixed) issue one search after N adds.
-- `--add-batch N`: (add-search-mixed) memory items batched per add op.
+- `--search-every N`: (chat-replay) issue a recall search every N user turns
+  (default 1 = every user turn).
 - `--raw`: also write per-request `raw.ndjson`.
 - `--no-delete-on-exit`: keep per-user state after the run.
 
@@ -281,11 +299,11 @@ pytest -q
 ## Versioning
 
 Releases are marked with git tags (`vMAJOR.MINOR.PATCH`). The current release
-is **v0.2.0**. Tag a release at a stable, documented milestone:
+is **v0.3.0**. Tag a release at a stable, documented milestone:
 
 ```sh
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 During 0.x, each minor bump marks a meaningful, tested milestone (a coherent

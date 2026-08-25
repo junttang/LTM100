@@ -12,14 +12,15 @@ from typing import Iterator
 
 import pytest
 
-from ltm100.common import MemoryItem, QueryItem, ResultItem, UserId
+from ltm100.common import MemoryItem, QueryItem, ResultItem, Turn, UserId
 from ltm100.core.config import RunConfig
 from ltm100.core.runner import LoadRunner
-from ltm100.core.scenarios import AddLoad, AddSearchMixed, SearchLoad
+from ltm100.core.scenarios import AddLoad, SearchLoad
 
 
 class FakeDataset:
-    """A tiny dataset: each user has `n` memories and 2 queries."""
+    """A tiny dataset: each user has `n` memories. (No query_stream: scenarios
+    derive search queries from memory content.)"""
 
     name = "fake"
 
@@ -33,10 +34,6 @@ class FakeDataset:
         for i in range(self.n_memories):
             yield MemoryItem(content=f"{user}-mem-{i}", producer=user)
 
-    def query_stream(self, user: UserId) -> Iterator[QueryItem]:
-        yield QueryItem(query=f"{user}-q0")
-        yield QueryItem(query=f"{user}-q1")
-
 
 class FakeBackend:
     """In-memory async backend that records calls and can fail on demand."""
@@ -47,7 +44,7 @@ class FakeBackend:
 
     def __init__(self) -> None:
         self.adds: list[tuple[UserId, int]] = []
-        self.searches: list[UserId] = []
+        self.searches: list[tuple[UserId, str]] = []  # (user, query string)
         self.calls = 0
 
     async def setup(self, users: list[UserId]) -> None:
@@ -58,6 +55,7 @@ class FakeBackend:
         if self.fail_every and self.calls % self.fail_every == 0:
             raise RuntimeError("forced add failure")
         self.adds.append((user, len(items)))
+        await asyncio.sleep(0)  # yield so concurrent users interleave (real backends yield on I/O)
         return [f"{user}-{i}" for i in range(len(items))]
 
     async def search(self, user: UserId, query: QueryItem) -> list[ResultItem]:
@@ -66,7 +64,8 @@ class FakeBackend:
             await asyncio.sleep(self.search_delay)
         if self.fail_every and self.calls % self.fail_every == 0:
             raise RuntimeError("forced search failure")
-        self.searches.append(user)
+        self.searches.append((user, query.query))
+        await asyncio.sleep(0)  # yield so concurrent users interleave
         return [ResultItem(content="hit")]
 
     async def teardown(self, users: list[UserId], *, delete: bool) -> None:
@@ -97,21 +96,35 @@ async def test_search_load_emits_searches_only():
     assert backend.adds == []
     summary = runner.recorder.summary()
     assert summary["by_op"]["search"]["count"] == 10
+    # Search queries are content-derived from the user's own memories.
+    for user, q in backend.searches:
+        assert q.startswith(f"{user}-mem-")
 
 
 @pytest.mark.asyncio
-async def test_mixed_emits_both():
-    ds = FakeDataset(n_memories=50)
+async def test_chat_replay_mixed_emits_both():
+    """chat-replay interleaves recall (search) and ingestion (add): with
+    search_every=1 every user turn issues a search, so both op types appear."""
+    from ltm100.core.scenarios import ChatReplay
+
+    class TurnDataset(FakeDataset):
+        def turn_stream(self, user):
+            # 3 user/assistant turn-pairs; each turn has one memory chunk.
+            for i in range(3):
+                yield Turn(role="user", items=[MemoryItem(content=f"{user}-ut-{i}", producer=user)])
+                yield Turn(role="assistant", items=[MemoryItem(content=f"{user}-at-{i}", producer=user)])
+
+    ds = TurnDataset(n_memories=3)
     backend = FakeBackend()
-    cfg = RunConfig(users=1, ops=50, seed=0)
+    cfg = RunConfig(users=1, ops=20, seed=0)
     runner = LoadRunner(
-        client=backend, dataset=ds, scenario=AddSearchMixed(search_every=10), config=cfg
+        client=backend, dataset=ds, scenario=ChatReplay(think=0.0), config=cfg
     )
     await runner.run()
     assert len(backend.adds) > 0
     assert len(backend.searches) > 0
     summary = runner.recorder.summary()
-    assert summary["by_op"]["add"]["count"] + summary["by_op"]["search"]["count"] == 50
+    assert summary["by_op"]["add"]["count"] + summary["by_op"]["search"]["count"] == 20
 
 
 @pytest.mark.asyncio

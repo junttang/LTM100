@@ -98,7 +98,7 @@ def test_cli_run_parses_args(tmp_path):
             "--config",
             _write_config(tmp_path),
             "--scenario",
-            "add-search-mixed",
+            "chat-replay",
             "--users",
             "50",
             "--duration",
@@ -110,7 +110,7 @@ def test_cli_run_parses_args(tmp_path):
         ]
     )
     assert args.command == "run"
-    assert args.scenario == "add-search-mixed"
+    assert args.scenario == "chat-replay"
     assert args.users == 50
     assert args.duration == 60.0
     assert args.seed == 7
@@ -161,27 +161,7 @@ def test_cli_scenario_params_forwarded(tmp_path):
     parser = build_parser()
     from ltm100.cli import _build_scenario
 
-    # add-search-mixed: search_every / add_batch
-    args = parser.parse_args(
-        [
-            "run",
-            "--config",
-            _write_config(tmp_path),
-            "--scenario",
-            "add-search-mixed",
-            "--duration",
-            "10",
-            "--search-every",
-            "5",
-            "--add-batch",
-            "3",
-        ]
-    )
-    mixed = _build_scenario(args)
-    assert mixed.search_every == 5  # type: ignore[attr-defined]
-    assert mixed.add_batch == 3  # type: ignore[attr-defined]
-
-    # chat-replay: think
+    # chat-replay: think + search_every
     args = parser.parse_args(
         [
             "run",
@@ -193,10 +173,28 @@ def test_cli_scenario_params_forwarded(tmp_path):
             "10",
             "--think",
             "0.2",
+            "--search-every",
+            "5",
         ]
     )
     replay = _build_scenario(args)
     assert replay.think == 0.2  # type: ignore[attr-defined]
+    assert replay.search_every == 5  # type: ignore[attr-defined]
+
+    # chat-replay defaults: search_every defaults to 1 (every user turn)
+    args = parser.parse_args(
+        [
+            "run",
+            "--config",
+            _write_config(tmp_path),
+            "--scenario",
+            "chat-replay",
+            "--duration",
+            "10",
+        ]
+    )
+    replay = _build_scenario(args)
+    assert replay.search_every == 1  # type: ignore[attr-defined]
 
     # realistic: search_weight + think
     args = parser.parse_args(

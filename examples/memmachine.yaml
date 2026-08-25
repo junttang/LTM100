@@ -2,7 +2,7 @@
 #
 # Copy and edit: fill in base_url. Run with:
 #   ltm100 run --config examples/memmachine.yaml \
-#       --scenario add-search-mixed --users 50 --duration 60 --seed 0
+#       --scenario chat-replay --users 50 --duration 60 --seed 0
 
 dataset:
   name: longmemeval

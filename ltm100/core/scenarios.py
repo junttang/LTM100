@@ -3,17 +3,27 @@
 Each Scenario turns a per-user dataset stream into a plan of Ops with delays.
 The closed model loops back-to-back (delay=0) unless a scenario adds think
 time; the open model consumes a bounded number of ops per arriving session
-(see the runner's `_open_session`), so an open scenario's plan is infinite.
+(see the runner's `_open_session`). Every scenario's plan is **infinite**
+(it wraps its underlying stream), so a duration run sustains load instead of
+going idle once a finite stream is exhausted; the runner bounds consumption
+via duration/ops (closed) or session_ops (open).
+
+Search queries are **content-derived**: built from the user's own
+`memory_stream` items (one query per stored unit), so the query pool is as
+large as the memory stream and cycling it does not naively repeat a single
+query (which would warm a server result cache and understate latency).
+`chat-replay` instead derives each recall query from the upcoming user turn's
+content. No scenario consumes a separate evaluation `query_stream`.
 
 Scenarios here:
-  - AddLoad:        stream all memories back-to-back, then stop. (closed)
-  - SearchLoad:     ingest is assumed pre-done (warm-up); loop the query
-                    stream repeatedly until the runner stops us. (closed)
-  - AddSearchMixed: interleave add and search from the same user's streams. (closed)
-  - Realistic:      infinite search-weighted op stream with inter-arrival
-                    jitter, intended for the open model. The op mix (search
-                    vs add) is owned here via `search_weight`, not by the
-                    runner — open and closed share one Scenario interface.
+  - AddLoad:      infinite add stream over the user's memory_stream. (closed/open)
+  - SearchLoad:   infinite content-derived search stream; assumes pre-ingest. (closed/open)
+  - Realistic:    infinite search-weighted op stream with think jitter, intended
+                  for the open model. The op mix (search vs add) is owned here
+                  via `search_weight`, not by the runner. (closed/open)
+  - ChatReplay:   replay a chatbot-with-LTM workload over the dataset's
+                  turn_stream (recall before a user turn, then ingest the turn),
+                  with a configurable recall cadence. (closed/open)
 """
 
 from __future__ import annotations
@@ -21,7 +31,7 @@ from __future__ import annotations
 import random
 from typing import Any, Iterator
 
-from ltm100.common import DatasetAdapter, QueryItem, UserId
+from ltm100.common import DatasetAdapter, MemoryItem, QueryItem, UserId
 from ltm100.core.op import Op, OpType, Scenario
 
 
@@ -36,8 +46,20 @@ def _seed_for(seed: int, user: str) -> int:
     return h
 
 
+def _content_queries(memories: list[MemoryItem]) -> list[QueryItem]:
+    """Content-derived search queries, one per memory item.
+
+    The pool is as large as the memory stream, so cycling it does not
+    naively repeat a single query (which would warm a server result cache and
+    understate latency). Each query is the memory item's own content."""
+    return [QueryItem(query=m.content, top_k=20) for m in memories]
+
+
 class AddLoad:
-    """Pure storage throughput: each user adds its memory stream back-to-back."""
+    """Pure storage throughput: each user adds its memory stream forever.
+
+    The plan wraps the memory stream, so a duration run sustains add load
+    until the runner stops it (count- or time-based)."""
 
     name = "add-load"
 
@@ -47,21 +69,26 @@ class AddLoad:
         dataset: DatasetAdapter,
         rng_state: dict[str, Any],
     ) -> Iterator[Op]:
-        for item in dataset.memory_stream(user):
-            yield Op(type=OpType.ADD, items=[item], delay=0.0)
+        memories = list(dataset.memory_stream(user))
+        if not memories:
+            return
+        i = 0
+        while True:
+            yield Op(type=OpType.ADD, items=[memories[i % len(memories)]], delay=0.0)
+            i += 1
 
 
 class SearchLoad:
-    """Pure search throughput: each user loops its query stream repeatedly.
+    """Pure search throughput: each user searches content-derived queries forever.
 
-    Assumes memories were pre-ingested (warm-up). The plan is infinite; the
-    runner terminates it via duration/ops. To avoid every user issuing the
-    exact same query in lockstep, the first query is jittered by an op index
-    drawn from the seeded state.
-    """
+    Assumes memories were pre-ingested (warm-up), so searches run against the
+    user's own stored content. The query pool is built from the user's
+    `memory_stream`; each pass through the pool starts at a rotating offset
+    so passes are not identical, and a small think time per op drifts users
+    out of lockstep. The plan is infinite; the runner bounds it via
+    duration/ops (closed) or session_ops (open)."""
 
     name = "search-load"
-    max_iterations = 10_000
 
     def plan(
         self,
@@ -70,68 +97,36 @@ class SearchLoad:
         rng_state: dict[str, Any],
     ) -> Iterator[Op]:
         rng = random.Random(_seed_for(rng_state.get("seed", 0), user))
-        queries = list(dataset.query_stream(user))
-        if not queries:
+        queries = _content_queries(list(dataset.memory_stream(user)))
+        n = len(queries)
+        if n == 0:
             return
-        for _ in range(self.max_iterations):
-            for q in queries:
-                # Small think time so users drift out of lockstep.
-                delay = rng.uniform(0.0, 0.02)
-                yield Op(type=OpType.SEARCH, query=q, delay=delay)
-
-
-class AddSearchMixed:
-    """Interleaved add and search per user.
-
-    The user ingests its memory stream, but after every `search_every` adds,
-    it issues one search from its query stream. Adds and searches are thus
-    mixed within one user's lifetime. If the query stream is empty, this
-    degenerates to add-load.
-    """
-
-    name = "add-search-mixed"
-
-    def __init__(self, search_every: int = 20, add_batch: int = 1) -> None:
-        self.search_every = max(1, search_every)
-        self.add_batch = max(1, add_batch)
-
-    def plan(
-        self,
-        user: UserId,
-        dataset: DatasetAdapter,
-        rng_state: dict[str, Any],
-    ) -> Iterator[Op]:
-        queries = list(dataset.query_stream(user))
-        q_iter = (queries[i % len(queries)] for i in range(10_000 * len(queries) or 1))
-        adds_since_search = 0
-        batch: list = []
-        for item in dataset.memory_stream(user):
-            batch.append(item)
-            if len(batch) >= self.add_batch:
-                yield Op(type=OpType.ADD, items=batch, delay=0.0)
-                batch = []
-                adds_since_search += 1
-                if queries and adds_since_search % self.search_every == 0:
-                    yield Op(type=OpType.SEARCH, query=next(q_iter), delay=0.0)
-        if batch:
-            yield Op(type=OpType.ADD, items=batch, delay=0.0)
+        stride = max(1, n // 7)  # coprime-ish rotation so passes differ
+        pass_i = 0
+        while True:
+            offset = (pass_i * stride) % n
+            for j in range(n):
+                q = queries[(offset + j) % n]
+                yield Op(type=OpType.SEARCH, query=q, delay=rng.uniform(0.0, 0.02))
+            pass_i += 1
 
 
 class Realistic:
-    """Infinite search-weighted op stream for the open model.
+    """Infinite search-weighted op stream, intended for the open model.
 
     Each arriving user session (see the runner's `_open_session`) consumes up
     to `session_ops` ops from this plan then leaves. Per-op, a SEARCH is drawn
-    with probability `search_weight`, else an ADD of one memory item. A small
+    with probability `search_weight`, else an ADD of one memory item. Search
+    queries are content-derived (from the user's `memory_stream`); adds reuse
+    earlier memories cyclically once the stream is exhausted (an arriving
+    session is a returning user who has memories to re-add). A small
     think-time gap is attached as `Op.delay` so sessions are not perfectly
     back-to-back; the open model's inter-arrival is driven separately by the
     Poisson generator in the runner.
 
     The op mix is owned by this scenario (via `search_weight`), not by a
     runner-level weight, so the open and closed models share one Scenario
-    interface. Memories are pulled from `memory_stream`; once a user's stream
-    is exhausted, adds reuse earlier memories cyclically (an arriving session
-    is a returning user who has memories to re-add).
+    interface.
     """
 
     name = "realistic"
@@ -149,15 +144,15 @@ class Realistic:
         rng_state: dict[str, Any],
     ) -> Iterator[Op]:
         rng = random.Random(_seed_for(rng_state.get("seed", 0), user))
-        queries = list(dataset.query_stream(user))
         memories = list(dataset.memory_stream(user))
-        if not queries and not memories:
+        if not memories:
             return
+        queries = _content_queries(memories)
         i_add = 0
         i_q = 0
         # Infinite: the open runner bounds consumption per session.
         while True:
-            if memories and (not queries or rng.random() < self.search_weight):
+            if rng.random() < self.search_weight:
                 q = queries[i_q % len(queries)]
                 i_q += 1
                 delay = rng.uniform(0.0, self.think)
@@ -174,30 +169,35 @@ class ChatReplay:
     Models the real integration pattern: a chatbot recalls relevant memories
     before answering a user, then ingests the conversation turn. The plan
     walks the dataset's structured `turn_stream` (user/assistant turns in
-    order). For every turn:
+    order) and wraps it, so a duration run replays the conversation as many
+    times as needed. For every turn:
 
-      - if the turn is a **user** turn: first issue a SEARCH whose query is the
-        user turn's content (the recall step), then ADD the turn's items;
+      - if the turn is a **user** turn: issue a SEARCH whose query is the
+        user turn's content (the recall step) when this turn's recall cadence
+        fires (see `search_every`), then ADD the turn's items;
       - otherwise (assistant turn): just ADD the turn's items.
 
     Adds and the recall search are interleaved exactly as a live chatbot
     session would interleave them. The search query is derived from the
-    upcoming user turn (not the dataset's separate evaluation question), so
-    recall is driven by the conversation itself.
+    upcoming user turn (not a separate evaluation question), so recall is
+    driven by the conversation itself. `query_stream` is not used.
 
     Requires a dataset adapter that implements `turn_stream` (LongMemEval
-    does). Closed model; the turn stream is finite, so the user stops when
-    the conversation is replayed (or on duration/ops). `query_stream` is not
-    used by this scenario.
+    does); the run fails loudly at validation time otherwise. The turn stream
+    wraps, so the conversation replays until the runner stops it (duration/ops
+    closed, or session_ops open). A small `think` delay between ops mimics
+    user/assistant think time so users drift out of lockstep.
 
-    A small `think` delay between ops mimics the user/assistant think time so
-    users drift out of lockstep.
+    `search_every` (default 1) emits a recall search before every Nth user
+    turn; 1 = recall before every user turn. The user-turn counter resets each
+    replay pass, so each pass is an independent, reproducible chat session.
     """
 
     name = "chat-replay"
 
-    def __init__(self, think: float = 0.05) -> None:
+    def __init__(self, think: float = 0.05, search_every: int = 1) -> None:
         self.think = think
+        self.search_every = max(1, int(search_every))
 
     def validate(self, dataset: DatasetAdapter) -> None:
         if not hasattr(dataset, "turn_stream"):
@@ -221,24 +221,34 @@ class ChatReplay:
         rng_state: dict[str, Any],
     ) -> Iterator[Op]:
         rng = random.Random(_seed_for(rng_state.get("seed", 0), user))
-        for turn in dataset.turn_stream(user):
-            is_user = turn.role.lower() == "user"
-            if is_user and turn.items:
-                # Recall before answering: query is the user turn's content.
-                first_content = turn.items[0].content
-                yield Op(
-                    type=OpType.SEARCH,
-                    query=QueryItem(query=first_content, top_k=20),
-                    delay=rng.uniform(0.0, self.think),
-                )
-            for item in turn.items:
-                yield Op(type=OpType.ADD, items=[item], delay=rng.uniform(0.0, self.think))
+        turns = list(dataset.turn_stream(user))
+        if not turns:
+            return
+        while True:  # wrap the conversation for sustained load
+            user_turn_idx = 0
+            for turn in turns:
+                is_user = turn.role.lower() == "user"
+                if is_user and turn.items:
+                    if user_turn_idx % self.search_every == 0:
+                        # Recall before answering: query is the user turn's content.
+                        first_content = turn.items[0].content
+                        yield Op(
+                            type=OpType.SEARCH,
+                            query=QueryItem(query=first_content, top_k=20),
+                            delay=rng.uniform(0.0, self.think),
+                        )
+                    user_turn_idx += 1
+                for item in turn.items:
+                    yield Op(
+                        type=OpType.ADD,
+                        items=[item],
+                        delay=rng.uniform(0.0, self.think),
+                    )
 
 
 SCENARIOS: dict[str, type] = {
     AddLoad.name: AddLoad,
     SearchLoad.name: SearchLoad,
-    AddSearchMixed.name: AddSearchMixed,
     Realistic.name: Realistic,
     ChatReplay.name: ChatReplay,
 }
@@ -254,7 +264,6 @@ def get_scenario(name: str, **kwargs: Any) -> Scenario:
 __all__ = [
     "AddLoad",
     "SearchLoad",
-    "AddSearchMixed",
     "Realistic",
     "ChatReplay",
     "SCENARIOS",

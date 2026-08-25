@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from ltm100.common import MemoryItem, QueryItem, ResultItem, Turn, UserId
+from ltm100.common import MemoryItem, ResultItem, Turn, UserId
 from ltm100.core.config import RunConfig
 from ltm100.core.op import OpType
 from ltm100.core.runner import LoadRunner
@@ -25,10 +25,6 @@ class DialogueDataset:
         # Not used by chat-replay, but part of the contract.
         for i in range(3):
             yield MemoryItem(content=f"{user}-mem-{i}", producer=user)
-
-    def query_stream(self, user: UserId):
-        # Not used by chat-replay.
-        yield QueryItem(query=f"{user}-q")
 
     def turn_stream(self, user: UserId):
         for i in range(3):
@@ -53,9 +49,6 @@ class FlatDataset:
     def memory_stream(self, user: UserId):
         for i in range(3):
             yield MemoryItem(content=f"{user}-mem-{i}", producer=user)
-
-    def query_stream(self, user: UserId):
-        yield QueryItem(query=f"{user}-q")
 
 
 class RecordingBackend:
@@ -118,19 +111,74 @@ async def test_chat_replay_search_query_is_user_turn_content():
 
 
 @pytest.mark.asyncio
-async def test_chat_replay_terminates_when_stream_exhausted():
+async def test_chat_replay_count_terminates_at_ops():
+    """One pass of the dialogue is 3 turn-pairs = 9 ops; with ops=9 the run
+    stops exactly after one replay."""
     ds = DialogueDataset()
     backend = RecordingBackend()
-    # duration-based; the plan is finite (6 turns = 9 ops) so it ends early.
-    cfg = RunConfig(users=1, duration=5.0, seed=0)
+    cfg = RunConfig(users=1, ops=9, seed=0)
     runner = LoadRunner(client=backend, dataset=ds, scenario=ChatReplay(think=0.0), config=cfg)
-    await asyncio.wait_for(runner.run(), timeout=10.0)
+    await runner.run()
     seq = _ops_for_user(runner, "u0")
     assert seq == [
         "search", "add", "add",
         "search", "add", "add",
         "search", "add", "add",
     ]
+
+
+@pytest.mark.asyncio
+async def test_chat_replay_search_every_2():
+    """With search_every=2, only every 2nd user turn triggers a recall search.
+    The per-pass counter resets each pass: turns 0 and 2 search, turn 1 does
+    not. One pass = 2 searches + 6 adds = 8 ops."""
+    ds = DialogueDataset()
+    backend = RecordingBackend()
+    cfg = RunConfig(users=1, ops=8, seed=0)
+    runner = LoadRunner(
+        client=backend, dataset=ds, scenario=ChatReplay(think=0.0, search_every=2), config=cfg
+    )
+    await runner.run()
+    seq = _ops_for_user(runner, "u0")
+    # turn0: search + user add + assistant add
+    # turn1: (no search) + user add + assistant add
+    # turn2: search + user add + assistant add
+    assert seq == ["search", "add", "add", "add", "add", "search", "add", "add"]
+
+
+@pytest.mark.asyncio
+async def test_chat_replay_wraps_over_duration():
+    """The turn stream wraps, so a duration longer than one replay emits more
+    than the 9 ops of a single pass."""
+    ds = DialogueDataset()
+    backend = RecordingBackend()
+    cfg = RunConfig(users=1, duration=2.0, seed=0)
+    runner = LoadRunner(client=backend, dataset=ds, scenario=ChatReplay(think=0.0), config=cfg)
+    await asyncio.wait_for(runner.run(), timeout=10.0)
+    seq = _ops_for_user(runner, "u0")
+    assert len(seq) > 9  # the conversation replayed more than once
+
+
+@pytest.mark.asyncio
+async def test_chat_replay_runs_under_open_model():
+    """chat-replay works under the open model: Poisson-arriving sessions each
+    replay a bounded slice of the conversation. Both op types appear."""
+    ds = DialogueDataset()
+    backend = RecordingBackend()
+    cfg = RunConfig(
+        users=2,
+        duration=1.5,
+        seed=0,
+        model="open",
+        arrival_rate=20.0,
+        session_ops=6,
+    )
+    runner = LoadRunner(client=backend, dataset=ds, scenario=ChatReplay(think=0.0), config=cfg)
+    await asyncio.wait_for(runner.run(), timeout=10.0)
+    summary = runner.recorder.summary()
+    assert summary["total"] > 0
+    assert "search" in summary["by_op"]
+    assert "add" in summary["by_op"]
 
 
 @pytest.mark.asyncio
