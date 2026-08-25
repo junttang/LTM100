@@ -15,7 +15,7 @@ For the full design, see [`DESIGN.md`](./DESIGN.md).
 
 ## Status
 
-Version: **v0.1.0** (see [Versioning](#versioning)).
+Version: **v0.2.0** (see [Versioning](#versioning)).
 
 Early development. Datasets and LTM backends are pluggable; the initial
 baseline is the LongMemEval dataset + the MemMachine backend over REST.
@@ -28,6 +28,8 @@ Implemented:
 - Warm-up / pre-ingest before the measured run.
 - Datasets: LongMemEval (local file or HuggingFace), synthetic.
 - Backend: MemMachine (REST and MCP transports).
+- Configurable scenario parameters on the CLI (`--think`, `--search-every`,
+  `--add-batch`, `--search-weight`).
 - Reports: summary JSON/CSV + optional raw NDJSON.
 
 Planned:
@@ -279,11 +281,11 @@ pytest -q
 ## Versioning
 
 Releases are marked with git tags (`vMAJOR.MINOR.PATCH`). The current release
-is **v0.1.0**. Tag a release at a stable, documented milestone:
+is **v0.2.0**. Tag a release at a stable, documented milestone:
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 During 0.x, each minor bump marks a meaningful, tested milestone (a coherent
