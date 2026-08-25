@@ -1,7 +1,9 @@
 # LTM100 — Multi-User Load Benchmark for Long-Term Memory Systems
 
-> Status: **Design draft (no implementation yet).**
-> Last updated: 2026-08-24
+> Status: **Implemented (baseline verified against a live MemMachine
+> server).** This document is the design reference; the README is the fast
+> entry point and `docs/` holds the per-topic detail.
+> Last updated: 2026-08-25
 
 ## 1. Purpose
 
@@ -54,15 +56,16 @@ Three pluggable axes, plus a load core and a metrics recorder:
 
 ```
                  +------------------------+
-                 |   Scenario (closed /   |
-                 |   open / mixed)        |
+                 |   Scenario (op mix +   |
+                 |   data; closed/open    |
+                 |   consume schedule)    |
                  +-----------+------------+
                              |
                              v
    +-------------------+   +------------------+   +-------------------+
    |  DatasetAdapter   |-->|   Load Core      |-->|  MetricsRecorder  |
-   |  (per-user add +  |   | (asyncio users)  |   | (per-request,      |
-   |   query streams)  |   |                  |   |  by op type)       |
+   |  (per-user add    |   | (asyncio users)  |   | (per-request,      |
+   |   + turn streams) |   |                  |   |  by op type)       |
    +-------------------+   +--------+---------+   +-------------------+
                                     |
                                     v
@@ -80,7 +83,9 @@ Three pluggable axes, plus a load core and a metrics recorder:
 ```
 
 - **DatasetAdapter**: turns a raw dataset into per-user streams of `add`
-  payloads and `search` queries. Knows nothing about backends.
+  payloads (and optional dialogue `turn_stream` for chat-replay). Knows
+  nothing about backends or search queries — search queries are
+  content-derived by the scenarios.
 - **LTMClient** (backend adapter): async `add` / `search` against a specific
   backend, with per-user tenant scoping. Knows nothing about datasets or
   scenarios.
@@ -117,7 +122,8 @@ class DatasetAdapter(Protocol):
         """Optional: structured conversation turns, for chat-replay."""
 ```
 
-- `MemoryItem`: content + optional metadata (timestamp, producer, role).
+- `MemoryItem`: `content` + optional `timestamp`, `producer`, `role`,
+  `metadata`.
 - `Turn`: `(role, items)` for dialogue datasets (optional; used by
   `chat-replay`).
 - **No `query_stream`.** Search queries are **content-derived** by the
@@ -149,8 +155,12 @@ class LTMClient(Protocol):
     async def add(self, user: UserId, items: list[MemoryItem]) -> list[str]:
         """Store memories for user; return backend ids."""
 
-    async def search(self, user: UserId, query: QueryItem, top_k: int) -> list[ResultItem]:
-        """Retrieve memories for user (scoped to this user only)."""
+    async def search(self, user: UserId, query: QueryItem) -> list[ResultItem]:
+        """Retrieve memories for user (scoped to this user only).
+
+        The search depth (`top_k`) is carried on `query.top_k` (default 20,
+        set via the scenario `top_k` param / `--top-k`), not as a separate
+        argument."""
 
     async def teardown(self, users: list[UserId], *, delete: bool) -> None:
         """Optional cleanup (delete per-user state) per run."""
@@ -212,22 +222,26 @@ A Scenario decides, per virtual user, the **op mix** and **emit schedule**.
 ```python
 class Scenario(Protocol):
     name: str
-    def plan(self, user: UserId, dataset: DatasetAdapter, rng: Random) -> Iterator[Op]:
-        """Yield (op_type, payload, think_or_interarrival) for this user."""
+    def plan(self, user: UserId, dataset: DatasetAdapter, rng_state: dict) -> Iterator[Op]:
+        """Yield the sequence of ops for this user, in order. `rng_state`
+        carries the seeded RNG state so schedules are reproducible."""
+    def validate(self, dataset: DatasetAdapter) -> None: ...
 ```
 
 Initial scenarios (`chat-replay` is the primary workload; the rest are
 auxiliary load probes):
 1. **`chat-replay`**: replay a chatbot-with-LTM workload over the dataset's
    `turn_stream` (recall before a user turn, then ingest the turn), with a
-   configurable recall cadence (`search_every`). The primary workload.
+   configurable recall cadence (`search_every`) and LLM answer / user think
+   time (`answer_time`, `user_gap`). The primary workload.
 2. **`add-load`**: each user streams `memory_stream` back-to-back (wrapping),
    max concurrency. Pure storage throughput.
 3. **`search-load`**: users run pre-ingested, content-derived searches
    forever. Pure search throughput/latency.
-4. **`mixed`**: per-user inter-arrival, bounded session length, op mix
-   weighted toward search with occasional adds. The lightweight congestion
-   probe — needs no `turn_stream`, so it works with the synthetic dataset.
+4. **`mixed`**: a controllable add/search mixture (op mix via
+   `search_weight`), needs no `turn_stream` so it works with the synthetic
+   dataset. Under the open model its per-session slice gives a quick
+   congestion probe; under closed it loops like any other scenario.
 
 Every scenario runs under **both** closed and open load models. The op mix
 (add vs search) is owned by the Scenario plan for **both** models — the open
@@ -287,10 +301,11 @@ is optional; warm-up time is excluded from steady-state metrics.
 dataset adapter, LTM client adapter, defaults.
 
 **CLI** (per-run, changed often): `--users N`, `--scenario`, `--duration` /
-`--ops`, `--seed`, `--global-concurrency`, `--warmup`, `--ramp-up`,
-`--preingest`, `--preingest-fraction`, `--model`, `--arrival-rate`,
-`--session-ops`, `--queue-bound`, `--search-weight`, `--output`,
-`--delete-on-exit`.
+`--ops`, `--seed`, `--model`, `--global-concurrency`, `--warmup`, `--rampup`,
+`--preingest`, `--preingest-fraction`, `--arrival-rate`, `--session-ops`,
+`--queue-bound`, `--search-weight`, `--top-k`, `--think`, `--search-every`,
+`--answer-time`, `--user-gap`, `--raw`, `--no-delete-on-exit`, `--output`.
+See `ltm100 run --help` for the authoritative list.
 
 ## 10. Reproducibility
 
@@ -330,10 +345,13 @@ MemMachine server (v0.3.10)** via a smoke run:
   (`path` option). A **Synthetic** adapter (`synthetic`) is also provided for
   fast, dependency-free load testing.
 - Backend: **MemMachine** over **REST** (`/api/v2`), with
-  `UserId → {org_id, project_id}` → `session_key = f"{org_id}/{project_id}"`.
-- Scenarios: `add-load`, `search-load` (closed model). (Later: `chat-replay`
-  and `mixed`; `add-search-mixed` was retired — its `search_every`
-  cadence moved to `chat-replay`.)
+  `UserId → {org_id, project_id}` → `session_key = f"{org_id}/{project_id}"`,
+  and a second transport over **MCP** (same `LTMClient` contract).
+- Scenarios: `chat-replay` (primary), `add-load`, `search-load`, `mixed` —
+  all run under both closed and open models; all plans wrap their streams.
+  (`add-search-mixed` was retired early on — its `search_every` cadence
+  moved to `chat-replay`.) Scenario params: `--think`, `--search-every`,
+  `--search-weight`, `--top-k`, `--answer-time`, `--user-gap`.
 - CLI: `ltm100 run`, `ltm100 cleanup`; reports: `summary.json`, `summary.csv`,
   optional `raw.ndjson`.
 
@@ -380,15 +398,32 @@ Resolved during implementation:
   arguments. The MCP `add_memory` writes all memory types (episodic + semantic),
   unlike the episodic-only REST add, so MCP add latency is not directly
   comparable to REST add latency; documented rather than worked around.
+- **chat-replay LLM timing**: `chat-replay` models the LLM answer time
+  (`answer_time`) and the user's think/typing time (`user_gap`) as
+  Exponential-mean delays attached to specific ops, defaulting to 0
+  (back-to-back). Search depth is configurable via `top_k` (default 20).
+  All applied uniformly to every user for now.
 
-Still open / next work:
-- **Mem0 backend adapter**: a second LTM solution under the `LTMClient`
-  contract, to compare two LTM solutions on the same workload. Deferred.
-- **Additional datasets** (BEAM, LoCoMo) via the `DatasetAdapter` extension.
-- **Configurable memory types**: replace the REST adapter's hardcoded
-  episodic-only `types` with a config option (semantic adds LLM background
-  processing load). The MCP transport is already all-types by the tool's
-  design.
+Still open / next work (priority order):
+1. **Mem0 backend adapter** — a second LTM solution under the `LTMClient`
+   contract, to compare two LTM solutions on the same workload. Likely
+   SDK-based (serverless), so a sync SDK wrapped via an executor is a design
+   point to confirm.
+2. **Per-user in-flight > 1** — currently fixed at 1 in the runner; make it a
+   runner parameter so peak-concurrency measurement is not capped at N.
+3. **Per-user-group finer control** — define user groups with their own
+   `answer_time`/`user_gap`/`top_k` and a per-group user ratio, plus a
+   per-user (or per-group) duration / "aggressiveness" knob. (Implement
+   after the new timing/top_k params are validated to move load on a live
+   server.)
+4. **Configurable memory types** — replace the REST adapter's hardcoded
+   episodic-only `types` with a config option (semantic adds LLM background
+   processing load). The MCP transport is already all-types by the tool's
+   design. Synergy with Mem0.
+5. **Additional datasets** (BEAM, LoCoMo) via the `DatasetAdapter` extension
+   (must implement `memory_stream`, and `turn_stream` if dialogue).
+6. **Ramp-up / warm-up steady-state filtering** — the `warmup` field exists;
+   verify steady-state metric exclusion at scale.
 
 ## 14. Glossary
 
