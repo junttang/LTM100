@@ -25,6 +25,7 @@ from typing import Any
 import yaml
 
 from ltm100.adapters.backends.memmachine import MemMachineClient
+from ltm100.adapters.backends.memmachine_mcp import MemMachineMcpClient
 from ltm100.adapters.datasets.longmemeval import LongMemEvalAdapter
 from ltm100.adapters.datasets.synthetic import SyntheticAdapter
 from ltm100.common import DatasetAdapter, LTMClient
@@ -74,6 +75,7 @@ _DATASET_REGISTRY: dict[str, type] = {
 
 _BACKEND_REGISTRY: dict[str, type] = {
     MemMachineClient.name: MemMachineClient,
+    MemMachineMcpClient.name: MemMachineMcpClient,
 }
 
 

@@ -22,16 +22,16 @@ baseline is the LongMemEval dataset + the MemMachine backend over REST.
 
 Implemented:
 - Closed and open load models.
-- Scenarios: `add-load`, `search-load`, `add-search-mixed`, `realistic`.
+- Scenarios: `add-load`, `search-load`, `add-search-mixed`, `chat-replay`,
+  `realistic`.
 - Congestion policy (bounded queue with rejection) for the open model.
 - Warm-up / pre-ingest before the measured run.
 - Datasets: LongMemEval (local file or HuggingFace), synthetic.
-- Backend: MemMachine (REST).
+- Backend: MemMachine (REST and MCP transports).
 - Reports: summary JSON/CSV + optional raw NDJSON.
 
 Planned:
 - Mem0 backend adapter.
-- MCP transport under the same `LTMClient` contract.
 - Additional datasets (BEAM, LoCoMo).
 
 ## Install
@@ -40,6 +40,8 @@ Planned:
 pip install -e ".[dev]"
 # To use the LongMemEval adapter via HuggingFace also:
 pip install -e ".[datasets]"
+# To use the MemMachine MCP transport also:
+pip install -e ".[mcp]"
 ```
 
 The `ltm100` CLI is the entry point.
@@ -202,6 +204,19 @@ ltm100 run --config examples/synthetic.yaml \
     --raw --output out/congestion
 ```
 
+### MCP transport (same workload, MCP tools)
+
+Drive add/search through MemMachine's `add_memory` / `search_memory` MCP tools
+instead of REST — same `LTMClient` contract, so the workload and flags are
+identical; only the config changes. Useful to compare REST vs MCP overhead on
+the same load. (Requires `pip install -e ".[mcp]"`.)
+
+```sh
+ltm100 run --config examples/memmachine-mcp.yaml \
+    --scenario add-search-mixed --users 20 --duration 30 --seed 0 \
+    --output out/mcp-mixed
+```
+
 ### Common flags
 
 - `--duration SECONDS` or `--ops N`: how a run terminates (one is required).
@@ -237,9 +252,16 @@ ltm100 cleanup --config examples/memmachine.yaml --users 50
 ## Pluggable axes
 
 - **Dataset adapters** (`ltm100/adapters/datasets/`): LongMemEval, synthetic.
-- **Backend adapters** (`ltm100/adapters/backends/`): MemMachine (REST).
-- **Transports** (`ltm100/adapters/transports/`): REST; MCP planned under the
-  same `LTMClient` contract.
+- **Backend adapters** (`ltm100/adapters/backends/`): MemMachine (REST),
+  MemMachine-MCP.
+- **Transports** (`ltm100/adapters/transports/`): REST, MCP (`fastmcp`).
+
+The MCP transport drives `add`/`search` through MemMachine's `add_memory` /
+`search_memory` MCP tools (same `LTMClient` contract) so a workload can be
+compared REST-vs-MCP. Lifecycle (project create/delete) stays on REST, since
+MCP has no project-management tools. Note the MCP `add_memory` writes all
+memory types (episodic + semantic), unlike the episodic-only REST add, so MCP
+add latency is not directly comparable to REST add latency.
 
 See [`DESIGN.md`](./DESIGN.md) for the adapter contracts and how to add a new
 dataset or backend.

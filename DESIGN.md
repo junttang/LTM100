@@ -353,10 +353,23 @@ Resolved during implementation:
   overload as `status="rejected"` (zero latency, `error_kind="queue_full"`).
   Op mix is owned by the Scenario plan (not a runner-level weight), so the
   open and closed models share one Scenario interface.
+- **MCP transport**: a second transport under the same `LTMClient` contract
+  (`MemMachineMcpClient` + `McpTransport` over `fastmcp`). The measured
+  add/search ops call MemMachine's `add_memory`/`search_memory` MCP tools;
+  lifecycle (project create/delete) stays on REST, since MCP has no
+  project-management tools (hybrid lifecycle). Tenancy is passed as MCP tool
+  arguments. The MCP `add_memory` writes all memory types (episodic + semantic),
+  unlike the episodic-only REST add, so MCP add latency is not directly
+  comparable to REST add latency; documented rather than worked around.
 
 Still open / next work:
-- **MCP transport**: a second transport under the same `LTMClient` contract;
-  depends on the MemMachine MCP server's request model. Deferred.
+- **Mem0 backend adapter**: a second LTM solution under the `LTMClient`
+  contract, to compare two LTM solutions on the same workload. Deferred.
+- **Additional datasets** (BEAM, LoCoMo) via the `DatasetAdapter` extension.
+- **Configurable memory types**: replace the REST adapter's hardcoded
+  episodic-only `types` with a config option (semantic adds LLM background
+  processing load). The MCP transport is already all-types by the tool's
+  design.
 
 ## 14. Glossary
 

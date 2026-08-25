@@ -1,0 +1,23 @@
+# LTM100 example config: synthetic dataset + MemMachine backend over MCP.
+#
+# Drives add/search through MemMachine's MCP tools (add_memory / search_memory)
+# mounted at /mcp on the same server. Lifecycle (project create/delete) still
+# uses REST, since MCP has no project-management tools.
+#
+# Run with:
+#   ltm100 run --config examples/memmachine-mcp.yaml \
+#       --scenario add-search-mixed --users 20 --duration 30 --seed 0
+
+dataset:
+  name: synthetic
+  memories_per_user: 100
+  queries_per_user: 5
+  content_chars: 200
+
+backend:
+  name: memmachine-mcp
+  base_url: http://localhost:8080
+  mcp_path: /mcp
+  org_prefix: ltm100
+  timeout: 60.0
+  add_batch_size: 50

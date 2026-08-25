@@ -387,3 +387,31 @@ GET  /api/v2/health            readiness check
 > Note: MemMachine's `projects/list` is eventually consistent — an immediate
 > list after delete may still show a project before it disappears. The
 > delete itself is confirmed by the server's response, not by listing.
+
+### MemMachine-MCP transport
+
+The `memmachine-mcp` backend adapter reuses this exact contract under the same
+`LTMClient` interface, so every scenario runs identically; only the wire path
+differs. The measured `add`/`search` ops call MemMachine's MCP tools
+(`add_memory` / `search_memory`) mounted at `/mcp` on the same server, via
+`fastmcp.Client`. Tenancy is passed as tool arguments (`org_id` / `proj_id` /
+`user_id`), mapped the same way as REST.
+
+Lifecycle is hybrid: `setup`/`teardown` (project create/delete) still go
+through the REST endpoints above, because the MCP server exposes no
+project-management tools. Provisioning is out of measurement, so mixing
+transports there does not affect the measured add/search path.
+
+Two differences versus the REST adapter, by design and worth noting when
+comparing the two transports:
+
+- `add_memory` writes `types=ALL_MEMORY_TYPES` (episodic **and** semantic).
+  The REST adapter is episodic-only. Semantic memory triggers LLM-based
+  background processing, so MCP `add` latency is not directly comparable to
+  REST `add` latency.
+- `add_memory` returns a success status with no ids, so `add` reports
+  `n_items` as the number of items sent (one `add_memory` call per item),
+  whereas REST counts returned uids.
+- `search_memory` returns a `SearchResult` with the same
+  `content.episodic_memory.long_term_memory.episodes` shape the REST search
+  endpoint uses, so results parse identically.
