@@ -105,6 +105,14 @@ handful for synthetic — search scenarios attach a small **think jitter**
 (`delay`) so users drift out of lockstep and do not all fire the identical
 query at the same instant. This spreads timing, not query diversity.
 
+> **Exception — `chat-replay`:** this scenario does not use `query_stream`
+> at all. Instead it derives each recall query from the upcoming user turn's
+> content via the dataset's optional **`turn_stream(user)`**, which yields
+> `(role, items)` turns in conversation order. LongMemEval exposes this from
+> its `haystack_sessions` (user/assistant turns, each chunked the same way as
+> `memory_stream`); synthetic does not, and a `chat-replay` run against it
+> fails loudly at validation time.
+
 ### Termination
 
 Every run terminates by **either** `--duration SECONDS` or `--ops N`
@@ -207,6 +215,50 @@ against them as it goes.
 
 ---
 
+## `chat-replay` (closed)
+
+**Tests:** a real chatbot-with-LTM integration workload — recall before
+answering, then ingest the conversation turn, replayed over a multi-turn
+dialogue. Closest to how an LTM is actually used in production.
+
+**User behavior:** the user walks its dataset's structured `turn_stream`
+(user/assistant turns in conversation order). For every turn:
+
+- if it is a **user** turn: first issue a SEARCH whose query is the user
+  turn's content (the recall step the chatbot performs before answering),
+  then ADD the turn's items;
+- otherwise (assistant turn): just ADD the turn's items.
+
+So a user/assistant turn-pair becomes `search → add (user) → add
+(assistant)`. Recall is driven by the upcoming user turn's content — not by
+the dataset's separate evaluation question — exactly as a live chatbot
+queries its memory with the user's utterance. Adds and the recall search are
+interleaved as a real session interleaves them.
+
+**Users:** `--users N`.
+
+**Concurrency:** per-user in-flight 1; the conversation is replayed in order.
+
+**add:** one item per chunk of each turn's content, `delay = uniform(0,
+think)` (default 0.05). Both user and assistant turns are added identically
+(episodic, `producer` = user id).
+**search:** one per user turn, `query` = that turn's first chunk's content,
+`top_k` 20, `delay = uniform(0, think)`. `query_stream` is **not** used by
+this scenario.
+
+**Dataset requirement:** the dataset must expose `turn_stream` (LongMemEval
+does; synthetic does not). The runner validates this before the run and
+raises loudly if it is missing — a chat-replay run against a dataset without
+dialogue structure fails immediately rather than silently.
+
+**Pre-ingest:** not needed — the user adds its own conversation as it goes
+and recalls against what it has stored so far.
+
+**Termination:** the turn stream is finite, so the user stops when the
+conversation is replayed (or on `--duration`/`--ops`).
+
+---
+
 ## `realistic` (open)
 
 **Tests:** arrival-driven load — real traffic is not N fixed looping users
@@ -263,16 +315,16 @@ Sessions arrive until the deadline, then in-flight sessions drain.
 
 ## Comparison
 
-| | add-load | search-load | add-search-mixed | realistic |
-|---|---|---|---|---|
-| load model | closed | closed | closed | open |
-| ops | add only | search only | add + search interleaved | search-weighted add + search |
-| user lifetime | finite (stream exhausted) | infinite (loop) | finite (stream exhausted) | per-session (arrival → `session_ops`) |
-| concurrency | N fixed, parallel add | N fixed, parallel search | N fixed, mixed | emergent (Poisson arrivals) |
-| precondition | none | preingest required | none | preingest recommended |
-| termination | duration/ops | duration/ops | duration/ops | duration required |
-| op scheduling | back-to-back | think 0–0.02s | back-to-back | think 0–0.05s |
-| key output | write throughput | read latency | read/write mix | rejection/congestion metrics |
+| | add-load | search-load | add-search-mixed | chat-replay | realistic |
+|---|---|---|---|---|---|
+| load model | closed | closed | closed | closed | open |
+| ops | add only | search only | add + search interleaved | recall + add per turn | search-weighted add + search |
+| user lifetime | finite (stream exhausted) | infinite (loop) | finite (stream exhausted) | finite (dialogue replayed) | per-session (arrival → `session_ops`) |
+| concurrency | N fixed, parallel add | N fixed, parallel search | N fixed, mixed | N fixed, in-order replay | emergent (Poisson arrivals) |
+| precondition | none | preingest required | none | dataset with `turn_stream` | preingest recommended |
+| termination | duration/ops | duration/ops | duration/ops | duration/ops | duration required |
+| op scheduling | back-to-back | think 0–0.02s | back-to-back | think 0–0.05s | think 0–0.05s |
+| key output | write throughput | read latency | read/write mix | chatbot-LTM integration load | rejection/congestion metrics |
 
 ---
 

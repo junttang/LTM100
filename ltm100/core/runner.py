@@ -58,6 +58,14 @@ class LoadRunner:
 
     async def run(self) -> list[OpResult]:
         users = self.dataset.users(self.config.users, seed=self.config.seed)
+
+        # Let the scenario reject a misconfigured dataset loudly, before any
+        # setup/provisioning or user runs. A plan-time raise would be swallowed
+        # by the gather(return_exceptions=True) in the user loops.
+        validate = getattr(self.scenario, "validate", None)
+        if validate is not None:
+            validate(self.dataset)
+
         await self.client.setup(users)
 
         if self.config.global_concurrency > 0:

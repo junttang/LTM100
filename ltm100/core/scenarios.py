@@ -21,7 +21,7 @@ from __future__ import annotations
 import random
 from typing import Any, Iterator
 
-from ltm100.common import DatasetAdapter, UserId
+from ltm100.common import DatasetAdapter, QueryItem, UserId
 from ltm100.core.op import Op, OpType, Scenario
 
 
@@ -168,11 +168,79 @@ class Realistic:
                 yield Op(type=OpType.ADD, items=[item], delay=0.0)
 
 
+class ChatReplay:
+    """Replay a chatbot-with-LTM workload over a multi-turn dialogue.
+
+    Models the real integration pattern: a chatbot recalls relevant memories
+    before answering a user, then ingests the conversation turn. The plan
+    walks the dataset's structured `turn_stream` (user/assistant turns in
+    order). For every turn:
+
+      - if the turn is a **user** turn: first issue a SEARCH whose query is the
+        user turn's content (the recall step), then ADD the turn's items;
+      - otherwise (assistant turn): just ADD the turn's items.
+
+    Adds and the recall search are interleaved exactly as a live chatbot
+    session would interleave them. The search query is derived from the
+    upcoming user turn (not the dataset's separate evaluation question), so
+    recall is driven by the conversation itself.
+
+    Requires a dataset adapter that implements `turn_stream` (LongMemEval
+    does). Closed model; the turn stream is finite, so the user stops when
+    the conversation is replayed (or on duration/ops). `query_stream` is not
+    used by this scenario.
+
+    A small `think` delay between ops mimics the user/assistant think time so
+    users drift out of lockstep.
+    """
+
+    name = "chat-replay"
+
+    def __init__(self, think: float = 0.05) -> None:
+        self.think = think
+
+    def validate(self, dataset: DatasetAdapter) -> None:
+        if not hasattr(dataset, "turn_stream"):
+            raise ValueError(
+                "chat-replay requires a dataset with a turn_stream "
+                "(e.g. LongMemEval); the configured dataset does not provide one"
+            )
+
+    def plan(
+        self,
+        user: UserId,
+        dataset: DatasetAdapter,
+        rng_state: dict[str, Any],
+    ) -> Iterator[Op]:
+        return self._plan(user, dataset, rng_state)
+
+    def _plan(
+        self,
+        user: UserId,
+        dataset: DatasetAdapter,
+        rng_state: dict[str, Any],
+    ) -> Iterator[Op]:
+        rng = random.Random(_seed_for(rng_state.get("seed", 0), user))
+        for turn in dataset.turn_stream(user):
+            is_user = turn.role.lower() == "user"
+            if is_user and turn.items:
+                # Recall before answering: query is the user turn's content.
+                first_content = turn.items[0].content
+                yield Op(
+                    type=OpType.SEARCH,
+                    query=QueryItem(query=first_content, top_k=20),
+                    delay=rng.uniform(0.0, self.think),
+                )
+            for item in turn.items:
+                yield Op(type=OpType.ADD, items=[item], delay=rng.uniform(0.0, self.think))
+
+
 SCENARIOS: dict[str, type] = {
     AddLoad.name: AddLoad,
     SearchLoad.name: SearchLoad,
     AddSearchMixed.name: AddSearchMixed,
     Realistic.name: Realistic,
+    ChatReplay.name: ChatReplay,
 }
 
 
@@ -188,6 +256,7 @@ __all__ = [
     "SearchLoad",
     "AddSearchMixed",
     "Realistic",
+    "ChatReplay",
     "SCENARIOS",
     "get_scenario",
 ]

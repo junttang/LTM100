@@ -85,7 +85,10 @@ content** — that comes from the dataset adapter:
   scenarios cycle this finite query pool round-robin, with a small think
   jitter so users drift out of lockstep. Gold answer fields (`expected`) are
   carried for tracing only and are never scored — LTM100 measures load, not
-  recall.
+  recall. `chat-replay` is the exception: it derives each recall query from
+  the upcoming user turn's content via the dataset's optional
+  `turn_stream(user)` (LongMemEval only), so recall is driven by the
+  conversation itself rather than `query_stream`.
 
 See [`docs/scenarios.md`](./docs/scenarios.md) for the full per-scenario
 data-flow detail.
@@ -95,16 +98,16 @@ data-flow detail.
 A scenario turns each user's dataset streams into a sequence of operations.
 The op mix (add vs search) is owned by the scenario for both load models.
 
-| | add-load | search-load | add-search-mixed | realistic |
-| --- | --- | --- | --- | --- |
-| load model | closed | closed | closed | open |
-| ops | add only | search only | add + search interleaved | search-weighted add + search |
-| user lifetime | finite (stream exhausted) | infinite (loop) | finite (stream exhausted) | per-session (arrival → `session_ops`) |
-| concurrency | N fixed, parallel add | N fixed, parallel search | N fixed, mixed | emergent (Poisson arrivals) |
-| precondition | none | preingest required | none | preingest recommended |
-| termination | duration/ops | duration/ops | duration/ops | duration required |
-| op scheduling | back-to-back | think 0–0.02s | back-to-back | think 0–0.05s |
-| key output | write throughput | read latency | read/write mix | rejection/congestion metrics |
+| | add-load | search-load | add-search-mixed | chat-replay | realistic |
+| --- | --- | --- | --- | --- | --- |
+| load model | closed | closed | closed | closed | open |
+| ops | add only | search only | add + search interleaved | recall + add per turn | search-weighted add + search |
+| user lifetime | finite (stream exhausted) | infinite (loop) | finite (stream exhausted) | finite (dialogue replayed) | per-session (arrival → `session_ops`) |
+| concurrency | N fixed, parallel add | N fixed, parallel search | N fixed, mixed | N fixed, in-order replay | emergent (Poisson arrivals) |
+| precondition | none | preingest required | none | dataset with `turn_stream` | preingest recommended |
+| termination | duration/ops | duration/ops | duration/ops | duration/ops | duration required |
+| op scheduling | back-to-back | think 0–0.02s | back-to-back | think 0–0.05s | think 0–0.05s |
+| key output | write throughput | read latency | read/write mix | chatbot-LTM integration load | rejection/congestion metrics |
 
 For a detailed, per-scenario walkthrough — exactly how a virtual user
 behaves, how many run, the concurrency model, and the `add`/`search`
@@ -158,6 +161,19 @@ Interleaved add and search per user, mirroring a single user's lifetime.
 ltm100 run --config examples/synthetic.yaml \
     --scenario add-search-mixed --users 50 --duration 60 --seed 0 \
     --output out/mixed
+```
+
+### Chatbot-LTM integration (`chat-replay`, closed)
+
+Replay a multi-turn dialogue as a chatbot-with-LTM would: before each user
+turn, recall (search) against the user's utterance, then ingest both the
+user and assistant turns. Requires a dataset with a `turn_stream`
+(LongMemEval, not synthetic); the run fails loudly otherwise.
+
+```sh
+ltm100 run --config examples/memmachine.yaml \
+    --scenario chat-replay --users 10 --duration 60 --seed 0 \
+    --output out/chat-replay
 ```
 
 ### Arrival-driven load with congestion (`realistic`, open)

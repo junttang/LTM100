@@ -65,5 +65,14 @@ class Scenario(Protocol):
         """
         ...
 
+    def validate(self, dataset: DatasetAdapter) -> None:
+        """Optional pre-run check that the dataset supports this scenario.
+
+        Implementations that need a specific dataset capability (e.g. a
+        `turn_stream`) override this to raise `ValueError` early, so a
+        misconfigured run fails loudly before any user runs. Default: no-op.
+        """
+        ...
+
 
 __all__ = ["OpType", "Op", "OpResult", "Scenario"]

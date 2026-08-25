@@ -22,7 +22,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterator
 
-from ltm100.common import DatasetAdapter, MemoryItem, QueryItem, UserId
+from ltm100.common import DatasetAdapter, MemoryItem, QueryItem, Turn, UserId
 
 
 def _split_chunks(text: str, max_chars: int = 3000) -> list[str]:
@@ -190,6 +190,27 @@ class LongMemEvalAdapter:
         sample = self._sample_for_user(user)
         for content in _collect_turn_contents(sample):
             yield MemoryItem(content=content, producer=user)
+
+    def turn_stream(self, user: UserId) -> Iterator[Turn]:
+        """Yield haystack turns as (role, chunked items), in conversation order.
+
+        Unlike `memory_stream` (which flattens all turn contents), this keeps
+        the per-turn `role` and turn boundaries so a scenario can replay a
+        chatbot-with-LTM workload: recall before a user turn, then ingest the
+        user and following assistant turns. Long content is chunked the same
+        way as in `memory_stream` (<=3000 chars on word boundaries)."""
+        sample = self._sample_for_user(user)
+        for session in sample.get("haystack_sessions", []) or []:
+            for turn in session or []:
+                role = str(turn.get("role", "")).strip() or "user"
+                content = str(turn.get("content", "")).strip()
+                if not content:
+                    continue
+                chunks = _split_chunks(content)
+                if not chunks:
+                    continue
+                items = [MemoryItem(content=c, producer=user) for c in chunks]
+                yield Turn(role=role, items=items)
 
     def query_stream(self, user: UserId) -> Iterator[QueryItem]:
         sample = self._sample_for_user(user)

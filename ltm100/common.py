@@ -50,6 +50,23 @@ class ResultItem:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class Turn:
+    """One conversational turn from a multi-turn dialogue dataset.
+
+    Adapters that expose structured conversations (e.g. LongMemEval's
+    haystack_sessions, which alternate user/assistant turns) yield these via
+    `turn_stream` so a scenario can replay a real chatbot-with-LTM workload:
+    recall before a user turn, then ingest user + assistant turns. `role` is
+    the speaker ('user' / 'assistant' / ...); `items` are the memory chunks
+    the turn's content splits into, in order.
+    """
+
+    role: str
+    items: list[MemoryItem]
+
+
+
 @runtime_checkable
 class DatasetAdapter(Protocol):
     """Turns a raw dataset into per-user add/search streams.
@@ -71,6 +88,16 @@ class DatasetAdapter(Protocol):
 
     def query_stream(self, user: UserId) -> Iterator[QueryItem]:
         """Yield search queries for this user. May repeat or interleave."""
+        ...
+
+    def turn_stream(self, user: UserId) -> Iterator[Turn]:
+        """Yield structured conversation turns for this user, in order.
+
+        Optional: adapters backed by a multi-turn dialogue dataset implement
+        this so a scenario can replay a chatbot-with-LTM workload (recall
+        before a user turn, then ingest the turn). Adapters without dialogue
+        structure do not implement it; callers should check with `hasattr`.
+        """
         ...
 
 
