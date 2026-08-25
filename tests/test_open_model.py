@@ -14,7 +14,7 @@ import pytest
 from ltm100.common import MemoryItem, ResultItem, UserId
 from ltm100.core.config import RunConfig
 from ltm100.core.runner import LoadRunner
-from ltm100.core.scenarios import Realistic
+from ltm100.core.scenarios import Mixed
 
 
 class FakeDataset:
@@ -71,7 +71,7 @@ async def test_open_model_runs_within_duration():
         arrival_rate=20.0,
         session_ops=4,
     )
-    scenario = Realistic(search_weight=0.5, think=0.0)
+    scenario = Mixed(search_weight=0.5, think=0.0)
     runner = LoadRunner(client=backend, dataset=ds, scenario=scenario, config=cfg)
     import time
 
@@ -95,7 +95,7 @@ async def test_open_model_mixes_add_and_search():
         arrival_rate=30.0,
         session_ops=40,
     )
-    scenario = Realistic(search_weight=0.8, think=0.0)
+    scenario = Mixed(search_weight=0.8, think=0.0)
     runner = LoadRunner(client=backend, dataset=ds, scenario=scenario, config=cfg)
     await runner.run()
     summary = runner.recorder.summary()
@@ -121,7 +121,7 @@ async def test_open_model_rejects_under_overload():
         global_concurrency=2,
         queue_bound=0,  # reject immediately when cap saturated
     )
-    scenario = Realistic(search_weight=1.0, think=0.0)
+    scenario = Mixed(search_weight=1.0, think=0.0)
     runner = LoadRunner(client=backend, dataset=ds, scenario=scenario, config=cfg)
     await runner.run()
     statuses = [r.status for r in runner.recorder.raw()]
@@ -159,7 +159,7 @@ async def test_open_model_rejections_recorded_with_kind():
         global_concurrency=1,
         queue_bound=0,
     )
-    scenario = Realistic(search_weight=1.0, think=0.0)
+    scenario = Mixed(search_weight=1.0, think=0.0)
     runner = LoadRunner(client=backend, dataset=ds, scenario=scenario, config=cfg)
     await runner.run()
     rejected = [r for r in runner.recorder.raw() if r.status == "rejected"]

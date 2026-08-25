@@ -125,7 +125,7 @@ def test_cli_run_parses_open_model_args(tmp_path):
             "--config",
             _write_config(tmp_path),
             "--scenario",
-            "realistic",
+            "mixed",
             "--users",
             "20",
             "--duration",
@@ -153,7 +153,7 @@ def test_cli_run_parses_open_model_args(tmp_path):
     run_cfg = _build_run_config(args)
     assert run_cfg.model == "open"
     assert run_cfg.arrival_rate == 5.0
-    scenario = get_scenario("realistic", search_weight=args.search_weight)
+    scenario = get_scenario("mixed", search_weight=args.search_weight)
     assert scenario.search_weight == 0.9  # type: ignore[attr-defined]
 
 
@@ -196,14 +196,14 @@ def test_cli_scenario_params_forwarded(tmp_path):
     replay = _build_scenario(args)
     assert replay.search_every == 1  # type: ignore[attr-defined]
 
-    # realistic: search_weight + think
+    # mixed: search_weight + think
     args = parser.parse_args(
         [
             "run",
             "--config",
             _write_config(tmp_path),
             "--scenario",
-            "realistic",
+            "mixed",
             "--duration",
             "10",
             "--search-weight",
@@ -212,9 +212,9 @@ def test_cli_scenario_params_forwarded(tmp_path):
             "0.1",
         ]
     )
-    realistic = _build_scenario(args)
-    assert realistic.search_weight == 0.5  # type: ignore[attr-defined]
-    assert realistic.think == 0.1  # type: ignore[attr-defined]
+    mixed = _build_scenario(args)
+    assert mixed.search_weight == 0.5  # type: ignore[attr-defined]
+    assert mixed.think == 0.1  # type: ignore[attr-defined]
 
 
 def test_cli_cleanup_subcommand(tmp_path):

@@ -16,14 +16,16 @@ query (which would warm a server result cache and understate latency).
 content. No scenario consumes a separate evaluation `query_stream`.
 
 Scenarios here:
+  - ChatReplay:   the primary workload — replay a chatbot-with-LTM integration
+                  over the dataset's turn_stream (recall before a user turn,
+                  then ingest the turn), with a configurable recall cadence.
+                  (closed/open)
   - AddLoad:      infinite add stream over the user's memory_stream. (closed/open)
   - SearchLoad:   infinite content-derived search stream; assumes pre-ingest. (closed/open)
-  - Realistic:    infinite search-weighted op stream with think jitter, intended
-                  for the open model. The op mix (search vs add) is owned here
-                  via `search_weight`, not by the runner. (closed/open)
-  - ChatReplay:   replay a chatbot-with-LTM workload over the dataset's
-                  turn_stream (recall before a user turn, then ingest the turn),
-                  with a configurable recall cadence. (closed/open)
+  - Mixed:        controllable add/search mixture (op mix via `search_weight`),
+                  with think jitter. A simple, no-dialogue workload usable with
+                  any dataset (incl. synthetic) — handy for quick congestion
+                  probing. (closed/open)
 """
 
 from __future__ import annotations
@@ -111,25 +113,25 @@ class SearchLoad:
             pass_i += 1
 
 
-class Realistic:
-    """Infinite search-weighted op stream, intended for the open model.
+class Mixed:
+    """A controllable add/search mixture over the user's `memory_stream`.
 
-    Each arriving user session (see the runner's `_open_session`) consumes up
-    to `session_ops` ops from this plan then leaves. Per-op, a SEARCH is drawn
-    with probability `search_weight`, else an ADD of one memory item. Search
-    queries are content-derived (from the user's `memory_stream`); adds reuse
-    earlier memories cyclically once the stream is exhausted (an arriving
-    session is a returning user who has memories to re-add). A small
-    think-time gap is attached as `Op.delay` so sessions are not perfectly
-    back-to-back; the open model's inter-arrival is driven separately by the
-    Poisson generator in the runner.
+    A simple, no-dialogue workload: per op, a SEARCH is drawn with probability
+    `search_weight`, else an ADD of one memory item. It needs no `turn_stream`,
+    so it works with any dataset (including the synthetic one). Search queries
+    are content-derived (from the user's `memory_stream`); adds reuse memories
+    cyclically once the stream is exhausted (a returning user who has memories
+    to re-add). A small think-time gap is attached as `Op.delay` so ops are not
+    perfectly back-to-back. The plan is infinite; the runner bounds it via
+    duration/ops (closed) or `session_ops` (open).
 
     The op mix is owned by this scenario (via `search_weight`), not by a
     runner-level weight, so the open and closed models share one Scenario
-    interface.
+    interface. Handy as a quick congestion probe — a flat op stream with a
+    tunable search/add ratio that runs under either load model.
     """
 
-    name = "realistic"
+    name = "mixed"
 
     def __init__(self, search_weight: float = 0.8, think: float = 0.05) -> None:
         if not 0.0 <= search_weight <= 1.0:
@@ -150,7 +152,7 @@ class Realistic:
         queries = _content_queries(memories)
         i_add = 0
         i_q = 0
-        # Infinite: the open runner bounds consumption per session.
+        # Infinite: the runner bounds consumption per session / over duration.
         while True:
             if rng.random() < self.search_weight:
                 q = queries[i_q % len(queries)]
@@ -247,10 +249,10 @@ class ChatReplay:
 
 
 SCENARIOS: dict[str, type] = {
+    ChatReplay.name: ChatReplay,
     AddLoad.name: AddLoad,
     SearchLoad.name: SearchLoad,
-    Realistic.name: Realistic,
-    ChatReplay.name: ChatReplay,
+    Mixed.name: Mixed,
 }
 
 
@@ -262,10 +264,10 @@ def get_scenario(name: str, **kwargs: Any) -> Scenario:
 
 
 __all__ = [
+    "ChatReplay",
     "AddLoad",
     "SearchLoad",
-    "Realistic",
-    "ChatReplay",
+    "Mixed",
     "SCENARIOS",
     "get_scenario",
 ]

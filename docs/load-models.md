@@ -34,7 +34,7 @@ loops the scenario plan back-to-back:
   connected".
 - **Think time** (`Op.delay`) is the only timing variation. `delay=0`
   (add-load) is back-to-back; `delay=uniform(0, 0.05)` (chat-replay,
-  realistic) drifts users out of lockstep.
+  mixed) drifts users out of lockstep.
 
 Closed models the classic load test: "with N users hammering the server,
 how fast is it?" Use it to measure raw throughput and latency at a fixed

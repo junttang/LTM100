@@ -46,7 +46,7 @@ def _build_run_config(args: argparse.Namespace) -> RunConfig:
 
 def _build_scenario(args: argparse.Namespace):
     kwargs: dict[str, Any] = {}
-    if args.scenario == "realistic":
+    if args.scenario == "mixed":
         kwargs["search_weight"] = args.search_weight
         kwargs["think"] = args.think
     elif args.scenario == "chat-replay":
@@ -165,13 +165,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--search-weight",
         type=float,
         default=0.8,
-        help="realistic scenario: fraction of ops that are search (0..1)",
+        help="mixed scenario: fraction of ops that are search (0..1)",
     )
     run.add_argument(
         "--think",
         type=float,
         default=0.05,
-        help="realistic/chat-replay: max think-time jitter per op (seconds)",
+        help="mixed/chat-replay: max think-time jitter per op (seconds)",
     )
     run.add_argument(
         "--search-every",

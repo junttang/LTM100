@@ -43,7 +43,7 @@ class RunConfig:
     #                  before rejection (0 = reject immediately on cap)
     # The op mix (add vs search) for open sessions is owned by the Scenario
     # plan, not by a runner-level weight — open and closed share one Scenario
-    # interface. The `realistic` scenario takes a `search_weight` constructor
+    # interface. The `mixed` scenario takes a `search_weight` constructor
     # param for that mix.
     arrival_rate: float = 0.0
     session_ops: int = 0

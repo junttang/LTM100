@@ -25,9 +25,10 @@ baseline is the LongMemEval dataset + the MemMachine backend over REST.
 
 Implemented:
 - Closed and open load models (every scenario runs under both; see below).
-- Scenarios: `add-load`, `search-load`, `chat-replay`, `realistic`. All wrap
-  their data streams to sustain load for a duration run, and all search on
-  content-derived queries (from the user's own memories / conversation turns).
+- Scenarios: `chat-replay` (the primary workload), `add-load`, `search-load`,
+  `mixed`. All wrap their data streams to sustain load for a duration run,
+  and all search on content-derived queries (from the user's own memories /
+  conversation turns).
 - Congestion policy (bounded queue with rejection) for the open model.
 - Warm-up / pre-ingest before the measured run.
 - Datasets: LongMemEval (local file or HuggingFace), synthetic.
@@ -90,7 +91,7 @@ content** — that comes from the dataset adapter:
   items); synthetic yields a fixed number of deterministic items. Items are
   stored as **episodic** memory (`producer` = the user id).
 - **search** queries are **content-derived**, not taken from a dataset
-  evaluation question. `search-load` and `realistic` build the query pool
+  evaluation question. `search-load` and `mixed` build the query pool
   from the user's own `memory_stream` items (one query per stored unit), so
   the pool is large and cycling it does not naively repeat a single query
   (which would warm a server result cache and understate latency). They
@@ -115,16 +116,16 @@ policy). The scenario owns the op mix and data; the runner owns the consume
 schedule (think-time loop vs arrival-driven sessions). See [Load
 models](#load-models).
 
-| | add-load | search-load | chat-replay | realistic |
+| | chat-replay | add-load | search-load | mixed |
 | --- | --- | --- | --- | --- |
 | load model | closed + open | closed + open | closed + open | closed + open |
-| ops | add only | search only | recall + add per turn | search-weighted add + search |
-| user lifetime | wraps to sustain | wraps to sustain | wraps the dialogue | per-session (arrival → `session_ops`) |
-| concurrency | N fixed, parallel add | N fixed, parallel search | N fixed, in-order replay | emergent under open; N fixed under closed |
-| precondition | none | preingest required | dataset with `turn_stream` | preingest recommended |
+| ops | recall + add per turn | add only | search only | search-weighted add + search |
+| user lifetime | wraps the dialogue | wraps to sustain | wraps to sustain | per-session (arrival → `session_ops`) |
+| concurrency | N fixed, in-order replay | N fixed, parallel add | N fixed, parallel search | emergent under open; N fixed under closed |
+| precondition | dataset with `turn_stream` | none | preingest required | preingest recommended |
 | termination | duration/ops | duration/ops | duration/ops | duration required (open) |
-| op scheduling | back-to-back | think 0–0.02s | think 0–0.05s | think 0–0.05s |
-| key output | write throughput | read latency | chatbot-LTM integration load | rejection/congestion metrics (open) |
+| op scheduling | think 0–0.05s | back-to-back | think 0–0.02s | think 0–0.05s |
+| key output | chatbot-LTM integration load | write throughput | read latency | rejection/congestion metrics (open) |
 
 For a detailed, per-scenario walkthrough — exactly how a virtual user
 behaves, how many run, the concurrency model, and the `add`/`search`
@@ -163,29 +164,7 @@ policy, and when to use which) see [`docs/load-models.md`](./docs/load-models.md
 First, make sure your LTM server is up (e.g. MemMachine at
 `http://localhost:8080`), then run one of the scenarios below.
 
-### Storage throughput (`add-load`, closed)
-
-Pure add pressure — measure how fast the server ingests memories.
-
-```sh
-ltm100 run --config examples/synthetic.yaml \
-    --scenario add-load --users 20 --duration 30 --seed 0 \
-    --output out/add-load
-```
-
-### Search throughput & latency (`search-load`, closed)
-
-Pre-ingest memories, then loop searches. `--preingest` fills each user's
-memories before the measured run; `--preingest-fraction` controls how much.
-
-```sh
-ltm100 run --config examples/synthetic.yaml \
-    --scenario search-load --users 20 --duration 30 --seed 0 \
-    --preingest --preingest-fraction 1.0 \
-    --output out/search-load
-```
-
-### Chatbot-LTM integration (`chat-replay`)
+### Chatbot-LTM integration (`chat-replay`, the primary workload)
 
 Replay a multi-turn dialogue as a chatbot-with-LTM would: before each user
 turn, recall (search) against the user's utterance, then ingest both the
@@ -214,18 +193,42 @@ ltm100 run --config examples/memmachine.yaml \
     --output out/chat-replay-open
 ```
 
-### Arrival-driven load with congestion (`realistic`, open)
+### Storage throughput (`add-load`, closed)
 
-Users arrive at 5/s, each doing 6 ops (80% search). A global cap of 4
-in-flight with a queue of 4 buffers bursts; overload beyond that is rejected.
+Pure add pressure — measure how fast the server ingests memories.
 
 ```sh
 ltm100 run --config examples/synthetic.yaml \
-    --scenario realistic --users 8 --duration 20 --seed 0 \
+    --scenario add-load --users 20 --duration 30 --seed 0 \
+    --output out/add-load
+```
+
+### Search throughput & latency (`search-load`, closed)
+
+Pre-ingest memories, then loop searches. `--preingest` fills each user's
+memories before the measured run; `--preingest-fraction` controls how much.
+
+```sh
+ltm100 run --config examples/synthetic.yaml \
+    --scenario search-load --users 20 --duration 30 --seed 0 \
+    --preingest --preingest-fraction 1.0 \
+    --output out/search-load
+```
+
+### Arrival-driven congestion probe (`mixed`, open)
+
+A flat add/search mixture with a tunable search ratio — needs no dialogue,
+so it runs against the synthetic dataset. Users arrive at 5/s, each doing 6
+ops (80% search). A global cap of 4 in-flight with a queue of 4 buffers
+bursts; overload beyond that is rejected.
+
+```sh
+ltm100 run --config examples/synthetic.yaml \
+    --scenario mixed --users 8 --duration 20 --seed 0 \
     --model open --arrival-rate 5.0 --session-ops 6 \
     --queue-bound 4 --global-concurrency 4 --search-weight 0.8 \
     --preingest --preingest-fraction 0.5 \
-    --output out/realistic
+    --output out/mixed
 ```
 
 To explicitly exercise rejection, raise the arrival rate far above the
@@ -234,7 +237,7 @@ saturated):
 
 ```sh
 ltm100 run --config examples/synthetic.yaml \
-    --scenario realistic --users 4 --duration 12 --seed 1 \
+    --scenario mixed --users 4 --duration 12 --seed 1 \
     --model open --arrival-rate 80.0 --session-ops 8 \
     --queue-bound 0 --global-concurrency 2 --search-weight 1.0 \
     --raw --output out/congestion
@@ -260,8 +263,8 @@ ltm100 run --config examples/memmachine-mcp.yaml \
 - `--seed N`: reproducible load shape (varies with N for variance runs).
 - `--global-concurrency N`: cap total in-flight ops (0 = no cap).
 - `--rampup SECONDS`: stagger user start to avoid a thundering herd.
-- `--search-weight F`: (realistic) fraction of ops that are search (0..1).
-- `--think SECONDS`: (realistic, chat-replay) max think-time jitter per op.
+- `--search-weight F`: (mixed) fraction of ops that are search (0..1).
+- `--think SECONDS`: (mixed, chat-replay) max think-time jitter per op.
 - `--search-every N`: (chat-replay) issue a recall search every N user turns
   (default 1 = every user turn).
 - `--raw`: also write per-request `raw.ndjson`.

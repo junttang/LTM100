@@ -89,7 +89,7 @@ currently hardcoded; semantic is a future option). In practice each `add` op
 carries one item and becomes one request.
 
 **`search` data — content-derived queries.** Search queries are **not**
-taken from a dataset evaluation question. `search-load` and `realistic`
+taken from a dataset evaluation question. `search-load` and `mixed`
 build the query pool from the user's own `memory_stream` items (one
 `QueryItem` per stored unit, `query` = the item's content, `top_k` 20). The
 pool is therefore as large as the memory stream, so cycling it does not
@@ -158,6 +158,62 @@ over; the runner only decides *how many* ops each session takes.
 
 ---
 
+## `chat-replay` — the primary workload
+
+**Tests:** a real chatbot-with-LTM integration workload — recall before
+answering, then ingest the conversation turn, replayed over a multi-turn
+dialogue. Closest to how an LTM is actually used in production, and the
+primary workload of LTM100.
+
+**User behavior:** the user walks its dataset's structured `turn_stream`
+(user/assistant turns in conversation order), which wraps so a duration run
+replays the conversation as many times as needed. For every turn:
+
+- if it is a **user** turn: issue a SEARCH whose query is the user turn's
+  content when this turn's recall cadence fires (see `search_every`), then
+  ADD the turn's items;
+- otherwise (assistant turn): just ADD the turn's items.
+
+So a user/assistant turn-pair becomes `search → add (user) → add
+(assistant)` when recall fires. Recall is driven by the upcoming user turn's
+content — exactly as a live chatbot queries its memory with the user's
+utterance. Adds and the recall search are interleaved as a real session
+interleaves them.
+
+**Users:** `--users N`.
+
+**Concurrency:** per-user in-flight 1; the conversation is replayed in order.
+
+**add:** one item per chunk of each turn's content, `delay = uniform(0,
+think)` (default 0.05). Both user and assistant turns are added identically
+(episodic, `producer` = user id).
+**search:** one per recall-firing user turn, `query` = that turn's first
+chunk's content, `top_k` 20, `delay = uniform(0, think)`. The query pool is
+**not** used — queries come from the turn stream.
+
+**Parameters:** `--think` (default 0.05), `--search-every N` (default 1 =
+recall before every user turn; N>1 recalls only every Nth user turn). The
+user-turn counter resets each replay pass, so each pass is an independent,
+reproducible chat session with the same recall pattern.
+
+**Dataset requirement:** the dataset must expose `turn_stream` (LongMemEval
+does; synthetic does not). The runner validates this before the run and
+raises loudly if it is missing — a chat-replay run against a dataset without
+dialogue structure fails immediately rather than silently.
+
+**Pre-ingest:** not needed — the user adds its own conversation as it goes
+and recalls against what it has stored so far.
+
+**Termination:** `--duration` or `--ops`. The turn stream wraps, so the user
+keeps replaying until the runner stops it.
+
+**Load model:** runs under both `--model closed` (a deterministic, in-order
+replay) and `--model open` (Poisson-arriving sessions, each replaying a
+slice of the conversation under the congestion policy — the most realistic
+chatbot load).
+
+---
+
 ## `add-load`
 
 **Tests:** pure storage (ingest) throughput — how fast the backend stores
@@ -213,72 +269,19 @@ Pre-ingest is excluded from metrics.
 
 ---
 
-## `chat-replay`
+## `mixed`
 
-**Tests:** a real chatbot-with-LTM integration workload — recall before
-answering, then ingest the conversation turn, replayed over a multi-turn
-dialogue. Closest to how an LTM is actually used in production.
+**Tests:** a controllable add/search mixture — a flat op stream with a
+tunable search/add ratio that works with any dataset (including the
+synthetic one, which has no `turn_stream`). Handy as a quick congestion
+probe under either load model: it exercises emergent concurrency and the
+congestion/rejection policy under overload without needing a dialogue.
 
-**User behavior:** the user walks its dataset's structured `turn_stream`
-(user/assistant turns in conversation order), which wraps so a duration run
-replays the conversation as many times as needed. For every turn:
+This is the lightweight, no-dialogue workload: unlike `chat-replay` it does
+not replay a conversation, so it has no `turn_stream` requirement and runs
+equally against synthetic data.
 
-- if it is a **user** turn: issue a SEARCH whose query is the user turn's
-  content when this turn's recall cadence fires (see `search_every`), then
-  ADD the turn's items;
-- otherwise (assistant turn): just ADD the turn's items.
-
-So a user/assistant turn-pair becomes `search → add (user) → add
-(assistant)` when recall fires. Recall is driven by the upcoming user turn's
-content — exactly as a live chatbot queries its memory with the user's
-utterance. Adds and the recall search are interleaved as a real session
-interleaves them.
-
-**Users:** `--users N`.
-
-**Concurrency:** per-user in-flight 1; the conversation is replayed in order.
-
-**add:** one item per chunk of each turn's content, `delay = uniform(0,
-think)` (default 0.05). Both user and assistant turns are added identically
-(episodic, `producer` = user id).
-**search:** one per recall-firing user turn, `query` = that turn's first
-chunk's content, `top_k` 20, `delay = uniform(0, think)`. The query pool is
-**not** used — queries come from the turn stream.
-
-**Parameters:** `--think` (default 0.05), `--search-every N` (default 1 =
-recall before every user turn; N>1 recalls only every Nth user turn). The
-user-turn counter resets each replay pass, so each pass is an independent,
-reproducible chat session with the same recall pattern.
-
-**Dataset requirement:** the dataset must expose `turn_stream` (LongMemEval
-does; synthetic does not). The runner validates this before the run and
-raises loudly if it is missing — a chat-replay run against a dataset without
-dialogue structure fails immediately rather than silently.
-
-**Pre-ingest:** not needed — the user adds its own conversation as it goes
-and recalls against what it has stored so far.
-
-**Termination:** `--duration` or `--ops`. The turn stream wraps, so the user
-keeps replaying until the runner stops it.
-
-**Load model:** runs under both `--model closed` (a deterministic, in-order
-replay) and `--model open` (Poisson-arriving sessions, each replaying a
-slice of the conversation under the congestion policy — the most realistic
-chatbot load).
-
----
-
-## `realistic`
-
-**Tests:** arrival-driven load — real traffic is not N fixed looping users
-but users arriving and leaving over time. This scenario exercises emergent
-concurrency and the congestion/rejection policy under overload.
-
-Although any scenario runs under the open model, `realistic` is the
-lightweight one **designed** for it: a flat, search-weighted op stream that
-needs no `turn_stream`, so it works equally with the synthetic dataset.
-
-**User behavior — two-stage:**
+**User behavior — two-stage (open model):**
 
 1. **Arrival process (runner-owned, not scenario).** A Poisson process spawns
    sessions at `--arrival-rate λ`. Inter-arrival is `expovariate(λ)`. Each
@@ -295,12 +298,17 @@ needs no `turn_stream`, so it works equally with the synthetic dataset.
    - each op carries think jitter (`delay = uniform(0, think)`, `think`
      default 0.05)
 
-**Users:** `--users N` is the **tenant identity pool, not the concurrent
-count**. Concurrency is emergent — a function of arrival rate vs service
-rate. The same user may appear in multiple concurrent sessions (same tenant,
-isolation preserved).
+Under the **closed** model, the same plan is simply looped back-to-back by a
+fixed pool of N users, so the op mix still applies and `--duration`/`--ops`
+bounds the run.
 
-**Concurrency (congestion policy — the core output):**
+**Users:** `--users N` is the **tenant identity pool, not the concurrent
+count** (under open). Concurrency is emergent — a function of arrival rate
+vs service rate. The same user may appear in multiple concurrent sessions
+(same tenant, isolation preserved). Under closed, N is the fixed concurrent
+count.
+
+**Concurrency (congestion policy — the core output under open):**
 - `--global-concurrency C`: max in-flight.
 - `--queue-bound Q`: how many requests beyond C may wait in queue.
 - When in-flight reaches `C + Q`, the next request is **rejected**
@@ -309,35 +317,36 @@ isolation preserved).
 - `Q=0` rejects immediately on C saturation. `Q>0` lets up to Q requests
   queue (busy-wait in 0.005s steps) before acquiring a slot.
 
-**add:** when not a search, one item per op, `delay = uniform(0, 0.05)`.
+**add:** when not a search, one item per op, `delay = uniform(0, think)`.
 **search:** query from the content-derived pool (the user's own memory
-contents), cycled, `top_k` default 20, `delay = uniform(0, 0.05)`.
+contents), cycled, `top_k` default 20, `delay = uniform(0, think)`.
 
 **Parameters:** `--search-weight` (default 0.8, forwarded to the scenario
 constructor), `--think` (default 0.05). The open-model knobs `--arrival-rate`,
 `--session-ops`, `--queue-bound` live on `RunConfig`.
 
-**Pre-ingest:** recommended — arriving users search against memory that
-should already exist.
+**Pre-ingest:** recommended — arriving/looping users search against memory
+that should already exist.
 
-**Termination:** `--duration` is required (open model enforces `duration > 0`).
-Sessions arrive until the deadline, then in-flight sessions drain.
+**Termination:** `--duration` or `--ops` (closed); `--duration` is required
+under open (sessions arrive until the deadline, then in-flight sessions
+drain).
 
 ---
 
 ## Comparison
 
-| | add-load | search-load | chat-replay | realistic |
+| | chat-replay | add-load | search-load | mixed |
 |---|---|---|---|---|
 | load model | closed + open | closed + open | closed + open | closed + open |
-| ops | add only | search only | recall + add per turn | search-weighted add + search |
-| search query source | — | own memory content | user turn content | own memory content |
-| user lifetime | wraps to sustain | wraps to sustain | wraps the dialogue | per-session (arrival → `session_ops`) |
-| concurrency | N fixed, parallel add | N fixed, parallel search | N fixed, in-order replay | emergent under open; N fixed under closed |
-| precondition | none | preingest required | dataset with `turn_stream` | preingest recommended |
+| ops | recall + add per turn | add only | search only | search-weighted add + search |
+| search query source | user turn content | — | own memory content | own memory content |
+| user lifetime | wraps the dialogue | wraps to sustain | wraps to sustain | per-session (arrival → `session_ops`) |
+| concurrency | N fixed, in-order replay | N fixed, parallel add | N fixed, parallel search | emergent under open; N fixed under closed |
+| precondition | dataset with `turn_stream` | none | preingest required | preingest recommended |
 | termination | duration/ops | duration/ops | duration/ops | duration required (open) |
-| op scheduling | back-to-back | think 0–0.02s | think 0–0.05s | think 0–0.05s |
-| key output | write throughput | read latency | chatbot-LTM integration load | rejection/congestion metrics (open) |
+| op scheduling | think 0–0.05s | back-to-back | think 0–0.02s | think 0–0.05s |
+| key output | chatbot-LTM integration load | write throughput | read latency | rejection/congestion metrics (open) |
 
 ---
 

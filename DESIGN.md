@@ -122,7 +122,7 @@ class DatasetAdapter(Protocol):
   `chat-replay`).
 - **No `query_stream`.** Search queries are **content-derived** by the
   scenarios — built from the user's own `memory_stream` items (for
-  `search-load` / `realistic`) or from `turn_stream` user-turn content (for
+  `search-load` / `mixed`) or from `turn_stream` user-turn content (for
   `chat-replay`). A dataset evaluation question is therefore not exposed as
   a search stream; this keeps the query pool large (one query per stored
   unit) so cycling does not naively repeat a single query and warm a server
@@ -185,7 +185,7 @@ Hybrid: both **closed** and **open** models are supported, sharing one runner.
 - Optional **global concurrency cap** (`asyncio.Semaphore(K)`) to test "max
   concurrency K" load independent of N.
 
-### 5.2 Open model (realistic) — implemented second
+### 5.2 Open model (mixed) — implemented second
 
 - Users arrive over time per an arrival process (Poisson by default, custom
   inter-arrival distributions pluggable).
@@ -216,15 +216,16 @@ class Scenario(Protocol):
         """Yield (op_type, payload, think_or_interarrival) for this user."""
 ```
 
-Initial scenarios (easiest first):
-1. **`add-load`**: each user streams `memory_stream` back-to-back (wrapping),
-   max concurrency. Pure storage throughput.
-2. **`search-load`**: users run pre-ingested, content-derived searches
-   forever. Pure search throughput/latency.
-3. **`chat-replay`**: replay a chatbot-with-LTM workload over the dataset's
+Initial scenarios (`chat-replay` is the primary workload; the rest are
+auxiliary load probes):
+1. **`chat-replay`**: replay a chatbot-with-LTM workload over the dataset's
    `turn_stream` (recall before a user turn, then ingest the turn), with a
-   configurable recall cadence (`search_every`).
-4. **`realistic`**: per-user inter-arrival, bounded session length, op mix
+   configurable recall cadence (`search_every`). The primary workload.
+2. **`add-load`**: each user streams `memory_stream` back-to-back (wrapping),
+   max concurrency. Pure storage throughput.
+3. **`search-load`**: users run pre-ingested, content-derived searches
+   forever. Pure search throughput/latency.
+4. **`mixed`**: per-user inter-arrival, bounded session length, op mix
    weighted toward search with occasional adds. The lightweight congestion
    probe — needs no `turn_stream`, so it works with the synthetic dataset.
 
@@ -232,7 +233,7 @@ Every scenario runs under **both** closed and open load models. The op mix
 (add vs search) is owned by the Scenario plan for **both** models — the open
 model's arriving sessions consume a bounded number of ops from the same
 `plan()` interface the closed model loops over. There is no runner-level
-op-mix weight; `realistic` takes a `search_weight` constructor param instead.
+op-mix weight; `mixed` takes a `search_weight` constructor param instead.
 All scenario plans are **infinite** (they wrap their stream), so a duration
 run sustains load instead of going idle when a finite stream is exhausted.
 
@@ -331,7 +332,7 @@ MemMachine server (v0.3.10)** via a smoke run:
 - Backend: **MemMachine** over **REST** (`/api/v2`), with
   `UserId → {org_id, project_id}` → `session_key = f"{org_id}/{project_id}"`.
 - Scenarios: `add-load`, `search-load` (closed model). (Later: `chat-replay`
-  and `realistic`; `add-search-mixed` was retired — its `search_every`
+  and `mixed`; `add-search-mixed` was retired — its `search_every`
   cadence moved to `chat-replay`.)
 - CLI: `ltm100 run`, `ltm100 cleanup`; reports: `summary.json`, `summary.csv`,
   optional `raw.ndjson`.
@@ -367,7 +368,7 @@ Resolved during implementation:
   concurrency cap. Excluded from metrics.
 - **Open model + congestion policy**: a Poisson arrival process spawns
   arriving sessions, each consuming a bounded number of ops from the Scenario
-  plan (`realistic`). A bounded queue on the global concurrency cap rejects
+  plan (`mixed`). A bounded queue on the global concurrency cap rejects
   overload as `status="rejected"` (zero latency, `error_kind="queue_full"`).
   Op mix is owned by the Scenario plan (not a runner-level weight), so the
   open and closed models share one Scenario interface.
