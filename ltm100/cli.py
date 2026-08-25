@@ -52,6 +52,8 @@ def _build_scenario(args: argparse.Namespace):
     elif args.scenario == "chat-replay":
         kwargs["think"] = args.think
         kwargs["search_every"] = args.search_every
+        kwargs["answer_time"] = args.answer_time
+        kwargs["user_gap"] = args.user_gap
     return get_scenario(args.scenario, **kwargs)
 
 
@@ -178,6 +180,21 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="chat-replay: issue a recall search every N user turns (default 1 = every user turn)",
+    )
+    run.add_argument(
+        "--answer-time",
+        type=float,
+        default=0.0,
+        help="chat-replay: mean seconds the LLM spends generating an answer "
+        "after a user turn (Exponential; 0 = back-to-back, default). Applied "
+        "uniformly to all users",
+    )
+    run.add_argument(
+        "--user-gap",
+        type=float,
+        default=0.0,
+        help="chat-replay: mean seconds the user takes before the next turn "
+        "(Exponential; 0 = back-to-back, default). Applied uniformly to all users",
     )
     run.add_argument("--output", default=None, help="output dir for reports")
     run.add_argument("--raw", action="store_true", help="also write raw.ndjson")

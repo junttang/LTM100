@@ -196,6 +196,28 @@ recall before every user turn; N>1 recalls only every Nth user turn). The
 user-turn counter resets each replay pass, so each pass is an independent,
 reproducible chat session with the same recall pattern.
 
+**LLM answer time and user think time** (`--answer-time`, `--user-gap`, both
+default 0 = back-to-back): a real chatbot does not loop back-to-back — after
+recalling, the LLM spends time generating an answer, and the user spends
+time reading/typing before the next turn. These are modeled as two *mean*
+delays (Exponential, the same distribution the open-model arrival process
+uses):
+
+- `--answer-time T`: a delay ~Exp(mean=T) is attached to the **last ADD** of
+  each user turn — the assistant turn's adds (the LLM writing its answer)
+  happen during this gap. Models LLM answer-generation time.
+- `--user-gap T`: a delay ~Exp(mean=T) is attached to the **first** op (the
+  recall SEARCH, or the first ADD if recall is skipped via `search_every`)
+  of a user turn, except the very first user turn of each replay pass (so
+  each pass starts cleanly). Models the user reading the prior reply and
+  typing the next utterance.
+
+Both apply **uniformly to all users** — the same mean for every user. (A
+per-user ratio for finer control is a planned follow-up.) With both at 0,
+chat-replay reproduces the original tight `search → add → search → add` loop;
+raising them spreads the load out, lowering concurrency toward a realistic
+chatbot session shape.
+
 **Dataset requirement:** the dataset must expose `turn_stream` (LongMemEval
 does; synthetic does not). The runner validates this before the run and
 raises loudly if it is missing — a chat-replay run against a dataset without

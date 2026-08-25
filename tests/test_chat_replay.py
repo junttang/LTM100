@@ -189,3 +189,82 @@ async def test_chat_replay_requires_turn_stream():
     runner = LoadRunner(client=backend, dataset=ds, scenario=ChatReplay(), config=cfg)
     with pytest.raises(ValueError, match="turn_stream"):
         await runner.run()
+
+
+@pytest.mark.asyncio
+async def test_chat_replay_answer_time_and_user_gap_add_idle():
+    """answer_time attaches a delay after a user turn's last add (LLM answer
+    time); user_gap attaches a delay before a user turn's first op (user
+    typing time), except the pass's first turn. With both set, the total
+    per-pass delay budget grows by ~3*answer_time + 2*user_gap (3 user turns
+    => 3 answer_times; user_gap skipped on the first turn => 2 user_gaps).
+    Compared deterministically via the plan's Op delays (seeded, not via
+    wall-clock, to avoid Exponential-draw flakiness)."""
+    import itertools
+
+    ds = DialogueDataset()
+
+    def total_delay(answer_time: float, user_gap: float) -> float:
+        plan = ChatReplay(
+            think=0.0, answer_time=answer_time, user_gap=user_gap
+        ).plan("u0", ds, {"seed": 0})
+        return sum(op.delay for op in itertools.islice(plan, 9))
+
+    baseline = total_delay(answer_time=0.0, user_gap=0.0)
+    with_gaps = total_delay(answer_time=1.0, user_gap=1.0)
+    # Expected extra idle = 3*1.0 + 2*1.0 = 5.0 (Exp means); assert it is
+    # substantial and clearly above the zero-gaps baseline.
+    assert with_gaps > baseline + 2.0
+
+
+@pytest.mark.asyncio
+async def test_chat_replay_answer_time_gaps_after_user_turn_only():
+    """answer_time lands on a user turn's last add (the assistant answer
+    follows during that gap); user_gap before a user turn's first op but not
+    the pass's first turn. Assistant turns get neither. Inspect the raw Op
+    delays from the plan (checks placement + that the delays are the Exponential
+    draws, aggregated to avoid single-draw flakiness)."""
+    import itertools
+
+    ds = DialogueDataset()
+    # 3 user turns interleaved with 3 assistant turns (u,a,u,a,u,a).
+    plan = ChatReplay(think=0.0, answer_time=2.0, user_gap=3.0).plan(
+        "u0", ds, {"seed": 0}
+    )
+    ops = list(itertools.islice(plan, 9))  # one pass: 3 turn-pairs
+
+    # Placement is deterministic: each turn yields 1 op here (turn0 user has a
+    # search + add = 2 ops, then turns 1..5 have 1 op each = 7, total 9).
+    # Layout: [search, add,  add, search, add,  add, search, add,  add]
+    #           u0    u0a   a1    u2       u2a  a3    u4       u4a  a5
+    types = [op.type.value for op in ops]
+    assert types == [
+        "search", "add", "add", "search", "add", "add", "search", "add", "add"
+    ]
+
+    # First user turn's first op (search) has no user_gap; assistant adds have
+    # neither gap. These three must be ~0 (think=0).
+    assert ops[0].delay < 0.05  # u0 search: first turn, no user_gap
+    assert ops[2].delay < 0.05  # a1 add: assistant, no gap
+    assert ops[5].delay < 0.05  # a3 add: assistant, no gap
+
+    # The answer_time draws (3 of them, mean 2.0 each) land on the user-turn
+    # adds: ops[1], ops[4], ops[7]. Their sum is ~6 in expectation; assert the
+    # aggregate is substantial (single Exponential draws vary, but their sum
+    # is robustly large).
+    answer_total = ops[1].delay + ops[4].delay + ops[7].delay
+    assert answer_total > 2.0
+    # The user_gap draws (2 of them, mean 3.0 each) land on the non-first user
+    # turns' first ops: ops[3] (u2 search) and ops[6] (u4 search).
+    user_gap_total = ops[3].delay + ops[6].delay
+    assert user_gap_total > 2.0
+    # Sanity: the assistant adds (ops[2], ops[5], ops[8]) carry no gap.
+    assert ops[8].delay < 0.05  # a5 add: assistant, no gap
+
+
+@pytest.mark.asyncio
+async def test_chat_replay_rejects_negative_timing_params():
+    with pytest.raises(ValueError, match="answer_time"):
+        ChatReplay(answer_time=-0.1)
+    with pytest.raises(ValueError, match="user_gap"):
+        ChatReplay(user_gap=-0.1)

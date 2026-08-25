@@ -267,6 +267,10 @@ ltm100 run --config examples/memmachine-mcp.yaml \
 - `--think SECONDS`: (mixed, chat-replay) max think-time jitter per op.
 - `--search-every N`: (chat-replay) issue a recall search every N user turns
   (default 1 = every user turn).
+- `--answer-time SECONDS`: (chat-replay) mean LLM answer-generation time after
+  a user turn (Exponential; 0 = back-to-back, default). Applied to all users.
+- `--user-gap SECONDS`: (chat-replay) mean user think/typing time before the
+  next turn (Exponential; 0 = back-to-back, default). Applied to all users.
 - `--raw`: also write per-request `raw.ndjson`.
 - `--no-delete-on-exit`: keep per-user state after the run.
 

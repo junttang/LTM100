@@ -31,6 +31,7 @@ Scenarios here:
 from __future__ import annotations
 
 import random
+from dataclasses import replace
 from typing import Any, Iterator
 
 from ltm100.common import DatasetAdapter, MemoryItem, QueryItem, UserId
@@ -193,13 +194,45 @@ class ChatReplay:
     `search_every` (default 1) emits a recall search before every Nth user
     turn; 1 = recall before every user turn. The user-turn counter resets each
     replay pass, so each pass is an independent, reproducible chat session.
+
+    **LLM answer time and user think time.** A real chatbot does not loop
+    back-to-back: after recalling, the LLM spends time generating an answer,
+    and the user spends time typing the next turn. These are modeled as two
+    *mean* delays attached to the ops that follow them:
+
+      - `answer_time`: an Exponential(mean=answer_time) delay is attached to
+        the **last** ADD of a user turn — the assistant turn's ADDs (the LLM
+        answer being written) happen during this gap. Models LLM generation
+        time.
+      - `user_gap`: an Exponential(mean=user_gap) delay is attached to the
+        **first** SEARCH (or first ADD if recall is skipped) of a user turn —
+        the user is reading/typing while nothing happens at the LTM. Models
+        user think/typing time before the next utterance.
+
+    Both default to 0, which reproduces the original back-to-back loop. They
+    apply uniformly to every user (a per-user ratio is a planned follow-up).
+    `answer_time` only takes effect when there is a following assistant turn;
+    `user_gap` only between turns (never before the very first turn of a
+    replay pass, so each pass starts cleanly).
     """
 
     name = "chat-replay"
 
-    def __init__(self, think: float = 0.05, search_every: int = 1) -> None:
+    def __init__(
+        self,
+        think: float = 0.05,
+        search_every: int = 1,
+        answer_time: float = 0.0,
+        user_gap: float = 0.0,
+    ) -> None:
         self.think = think
         self.search_every = max(1, int(search_every))
+        if answer_time < 0:
+            raise ValueError("answer_time must be >= 0")
+        if user_gap < 0:
+            raise ValueError("user_gap must be >= 0")
+        self.answer_time = answer_time
+        self.user_gap = user_gap
 
     def validate(self, dataset: DatasetAdapter) -> None:
         if not hasattr(dataset, "turn_stream"):
@@ -228,24 +261,43 @@ class ChatReplay:
             return
         while True:  # wrap the conversation for sustained load
             user_turn_idx = 0
-            for turn in turns:
+            for t_i, turn in enumerate(turns):
                 is_user = turn.role.lower() == "user"
+                turn_ops: list[Op] = []
                 if is_user and turn.items:
                     if user_turn_idx % self.search_every == 0:
                         # Recall before answering: query is the user turn's content.
                         first_content = turn.items[0].content
-                        yield Op(
-                            type=OpType.SEARCH,
-                            query=QueryItem(query=first_content, top_k=20),
-                            delay=rng.uniform(0.0, self.think),
+                        turn_ops.append(
+                            Op(
+                                type=OpType.SEARCH,
+                                query=QueryItem(query=first_content, top_k=20),
+                                delay=rng.uniform(0.0, self.think),
+                            )
                         )
                     user_turn_idx += 1
                 for item in turn.items:
-                    yield Op(
-                        type=OpType.ADD,
-                        items=[item],
-                        delay=rng.uniform(0.0, self.think),
-                    )
+                    turn_ops.append(
+                        Op(
+                            type=OpType.ADD,
+                            items=[item],
+                            delay=rng.uniform(0.0, self.think),
+                        )
+                )
+                if turn_ops:
+                    # user_gap: the user reads/typing before the next utterance.
+                    # Attached to the first op of a user turn, but not the very
+                    # first turn of a replay pass (each pass starts cleanly).
+                    if is_user and t_i > 0 and self.user_gap > 0:
+                        extra = rng.expovariate(1.0 / self.user_gap)
+                        turn_ops[0] = replace(turn_ops[0], delay=turn_ops[0].delay + extra)
+                    # answer_time: the LLM generating the answer (assistant turn)
+                    # happens during the gap after a user turn's last add.
+                    if is_user and self.answer_time > 0:
+                        extra = rng.expovariate(1.0 / self.answer_time)
+                        turn_ops[-1] = replace(turn_ops[-1], delay=turn_ops[-1].delay + extra)
+                    for op in turn_ops:
+                        yield op
 
 
 SCENARIOS: dict[str, type] = {
