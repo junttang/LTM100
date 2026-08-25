@@ -48,6 +48,12 @@ def _build_scenario(args: argparse.Namespace):
     kwargs: dict[str, Any] = {}
     if args.scenario == "realistic":
         kwargs["search_weight"] = args.search_weight
+        kwargs["think"] = args.think
+    elif args.scenario == "add-search-mixed":
+        kwargs["search_every"] = args.search_every
+        kwargs["add_batch"] = args.add_batch
+    elif args.scenario == "chat-replay":
+        kwargs["think"] = args.think
     return get_scenario(args.scenario, **kwargs)
 
 
@@ -162,6 +168,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.8,
         help="realistic scenario: fraction of ops that are search (0..1)",
+    )
+    run.add_argument(
+        "--think",
+        type=float,
+        default=0.05,
+        help="realistic/chat-replay: max think-time jitter per op (seconds)",
+    )
+    run.add_argument(
+        "--search-every",
+        type=int,
+        default=20,
+        help="add-search-mixed: issue one search after this many adds",
+    )
+    run.add_argument(
+        "--add-batch",
+        type=int,
+        default=1,
+        help="add-search-mixed: memory items batched per add op",
     )
     run.add_argument("--output", default=None, help="output dir for reports")
     run.add_argument("--raw", action="store_true", help="also write raw.ndjson")

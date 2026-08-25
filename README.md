@@ -224,6 +224,10 @@ ltm100 run --config examples/memmachine-mcp.yaml \
 - `--seed N`: reproducible load shape (varies with N for variance runs).
 - `--global-concurrency N`: cap total in-flight ops (0 = no cap).
 - `--rampup SECONDS`: stagger user start to avoid a thundering herd.
+- `--search-weight F`: (realistic) fraction of ops that are search (0..1).
+- `--think SECONDS`: (realistic, chat-replay) max think-time jitter per op.
+- `--search-every N`: (add-search-mixed) issue one search after N adds.
+- `--add-batch N`: (add-search-mixed) memory items batched per add op.
 - `--raw`: also write per-request `raw.ndjson`.
 - `--no-delete-on-exit`: keep per-user state after the run.
 

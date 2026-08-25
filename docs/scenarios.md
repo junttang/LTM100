@@ -203,9 +203,7 @@ progresses per user under a fixed seed.
 **search:** one every `search_every` adds, query cycled from
 `query_stream`, `delay=0`, `top_k` default 20.
 
-**Parameters:** constructor `search_every=20`, `add_batch=1`. These are not
-currently exposed on the CLI (defaults are used); they can be surfaced if
-needed.
+**Parameters:** `--search-every` (default 20), `--add-batch` (default 1).
 
 **Pre-ingest:** not needed — the user adds its own memories and searches
 against them as it goes.
@@ -245,6 +243,8 @@ think)` (default 0.05). Both user and assistant turns are added identically
 **search:** one per user turn, `query` = that turn's first chunk's content,
 `top_k` 20, `delay = uniform(0, think)`. `query_stream` is **not** used by
 this scenario.
+
+**Parameters:** `--think` (default 0.05).
 
 **Dataset requirement:** the dataset must expose `turn_stream` (LongMemEval
 does; synthetic does not). The runner validates this before the run and
@@ -302,8 +302,8 @@ isolation preserved).
 **search:** query cycled, `top_k` default 20, `delay = uniform(0, 0.05)`.
 
 **Parameters:** `--search-weight` (default 0.8, forwarded to the scenario
-constructor); `think` default 0.05 (not currently CLI-exposed). The open-model
-knobs `--arrival-rate`, `--session-ops`, `--queue-bound` live on `RunConfig`.
+constructor), `--think` (default 0.05). The open-model knobs `--arrival-rate`,
+`--session-ops`, `--queue-bound` live on `RunConfig`.
 
 **Pre-ingest:** recommended — arriving users search against memory that
 should already exist.

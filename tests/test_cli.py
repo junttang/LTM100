@@ -157,6 +157,68 @@ def test_cli_run_parses_open_model_args(tmp_path):
     assert scenario.search_weight == 0.9  # type: ignore[attr-defined]
 
 
+def test_cli_scenario_params_forwarded(tmp_path):
+    parser = build_parser()
+    from ltm100.cli import _build_scenario
+
+    # add-search-mixed: search_every / add_batch
+    args = parser.parse_args(
+        [
+            "run",
+            "--config",
+            _write_config(tmp_path),
+            "--scenario",
+            "add-search-mixed",
+            "--duration",
+            "10",
+            "--search-every",
+            "5",
+            "--add-batch",
+            "3",
+        ]
+    )
+    mixed = _build_scenario(args)
+    assert mixed.search_every == 5  # type: ignore[attr-defined]
+    assert mixed.add_batch == 3  # type: ignore[attr-defined]
+
+    # chat-replay: think
+    args = parser.parse_args(
+        [
+            "run",
+            "--config",
+            _write_config(tmp_path),
+            "--scenario",
+            "chat-replay",
+            "--duration",
+            "10",
+            "--think",
+            "0.2",
+        ]
+    )
+    replay = _build_scenario(args)
+    assert replay.think == 0.2  # type: ignore[attr-defined]
+
+    # realistic: search_weight + think
+    args = parser.parse_args(
+        [
+            "run",
+            "--config",
+            _write_config(tmp_path),
+            "--scenario",
+            "realistic",
+            "--duration",
+            "10",
+            "--search-weight",
+            "0.5",
+            "--think",
+            "0.1",
+        ]
+    )
+    realistic = _build_scenario(args)
+    assert realistic.search_weight == 0.5  # type: ignore[attr-defined]
+    assert realistic.think == 0.1  # type: ignore[attr-defined]
+
+
 def test_cli_cleanup_subcommand(tmp_path):
     parser = build_parser()
     args = parser.parse_args(
