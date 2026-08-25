@@ -18,7 +18,7 @@ the closed/open load models and the congestion policy.
 
 ## Status
 
-Version: **v0.3.0** (see [Versioning](#versioning)).
+Version: **v0.3.1** (see [Versioning](#versioning)).
 
 Early development. Datasets and LTM backends are pluggable; the initial
 baseline is the LongMemEval dataset + the MemMachine backend over REST.
@@ -318,11 +318,11 @@ pytest -q
 ## Versioning
 
 Releases are marked with git tags (`vMAJOR.MINOR.PATCH`). The current release
-is **v0.3.0**. Tag a release at a stable, documented milestone:
+is **v0.3.1**. Tag a release at a stable, documented milestone:
 
 ```sh
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.3.1
+git push origin v0.3.1
 ```
 
 During 0.x, each minor bump marks a meaningful, tested milestone (a coherent
