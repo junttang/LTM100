@@ -62,6 +62,49 @@ A scenario emits `Op`s of two kinds, carried over the `LTMClient` contract:
 Per-request recording: `op_type`, `user_id`, `started_at`, `ended_at`,
 `status` (ok / error / rejected), `error_kind`, `n_items`.
 
+### What data add and search operate on
+
+Neither the scenarios nor the runner decide *what content* is added or what
+*query* is searched — that comes entirely from the **dataset adapter**.
+A scenario only decides *when* and *how often*; the data is fixed by the
+dataset (and the seed for replication). This keeps the load shape separate
+from the data shape.
+
+**`add` data — `dataset.memory_stream(user)`** yields `MemoryItem`s, one per
+stored unit. The adapter owns the content; the backend adapter forwards
+`MemoryItem` fields to the wire. Per dataset:
+
+- **LongMemEval** — a sample's `haystack_sessions` are flattened into turn
+  `content`s, each split into <=3000-char chunks on word boundaries. One
+  turn can become several `MemoryItem`s. `role`/`timestamp`/`metadata` are
+  not set; only `content` and `producer` (the `UserId`) are sent. A user's
+  stream is its sample's entire haystack (typically tens to hundreds of
+  chunks).
+- **Synthetic** — `memories_per_user` (default 100) deterministic items of
+  `content_chars` (default 200) each, generated from the seed. Reproducible
+  and download-free.
+
+Every `MemoryItem` is sent as an **episodic** memory (`types: ["episodic"]`,
+currently hardcoded; semantic is a future option). In practice each `add` op
+carries one item and becomes one request.
+
+**`search` data — `dataset.query_stream(user)`** yields `QueryItem`s. The
+adapter owns the query strings; the scenario cycles through them. Per
+dataset:
+
+- **LongMemEval** — exactly one query per sample: the sample's `question`.
+  `QueryItem(query=question, top_k=20, expected={answer, question_type,
+  question_id})`. The `expected` gold fields are kept **for tracing/debugging
+  only and are never scored** — LTM100 does not measure recall quality. So a
+  LongMemEval user searches one question repeatedly.
+- **Synthetic** — `queries_per_user` (default 5) deterministic queries.
+
+All search scenarios (and pre-ingest) use a **finite query pool cycled
+round-robin**. Because the pool is small — one question for LongMemEval, a
+handful for synthetic — search scenarios attach a small **think jitter**
+(`delay`) so users drift out of lockstep and do not all fire the identical
+query at the same instant. This spreads timing, not query diversity.
+
 ### Termination
 
 Every run terminates by **either** `--duration SECONDS` or `--ops N`

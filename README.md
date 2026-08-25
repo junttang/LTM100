@@ -71,6 +71,25 @@ pick a dataset.
 When the virtual-user count exceeds the dataset's unique samples, samples
 are replicated so N is the driven user count, independent of dataset size.
 
+### What gets added and searched
+
+A scenario decides *when* and *how often* to issue add/search, but **not what
+content** — that comes from the dataset adapter:
+
+- **add** operates on `dataset.memory_stream(user)`: LongMemEval turns the
+  sample's haystack into <=3000-char chunks (one turn may yield several
+  items); synthetic yields a fixed number of deterministic items. Items are
+  stored as **episodic** memory (`producer` = the user id).
+- **search** operates on `dataset.query_stream(user)`: LongMemEval yields a
+  single query per sample (the `question`); synthetic yields a few. Search
+  scenarios cycle this finite query pool round-robin, with a small think
+  jitter so users drift out of lockstep. Gold answer fields (`expected`) are
+  carried for tracing only and are never scored — LTM100 measures load, not
+  recall.
+
+See [`docs/scenarios.md`](./docs/scenarios.md) for the full per-scenario
+data-flow detail.
+
 ## Scenarios
 
 A scenario turns each user's dataset streams into a sequence of operations.
