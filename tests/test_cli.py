@@ -216,6 +216,65 @@ def test_cli_scenario_params_forwarded(tmp_path):
     assert mixed.search_weight == 0.5  # type: ignore[attr-defined]
     assert mixed.think == 0.1  # type: ignore[attr-defined]
 
+    # --top-k forwards to search-issuing scenarios (default 20).
+    args = parser.parse_args(
+        [
+            "run",
+            "--config",
+            _write_config(tmp_path),
+            "--scenario",
+            "chat-replay",
+            "--duration",
+            "10",
+            "--top-k",
+            "50",
+        ]
+    )
+    assert _build_scenario(args).top_k == 50  # type: ignore[attr-defined]
+    args = parser.parse_args(
+        [
+            "run",
+            "--config",
+            _write_config(tmp_path),
+            "--scenario",
+            "search-load",
+            "--duration",
+            "10",
+            "--top-k",
+            "8",
+        ]
+    )
+    assert _build_scenario(args).top_k == 8  # type: ignore[attr-defined]
+    args = parser.parse_args(
+        [
+            "run",
+            "--config",
+            _write_config(tmp_path),
+            "--scenario",
+            "mixed",
+            "--duration",
+            "10",
+            "--top-k",
+            "3",
+        ]
+    )
+    assert _build_scenario(args).top_k == 3  # type: ignore[attr-defined]
+    # add-load has no search -> top_k is not forwarded (no attr), but the
+    # default flag value is still 20 on the namespace.
+    args = parser.parse_args(
+        [
+            "run",
+            "--config",
+            _write_config(tmp_path),
+            "--scenario",
+            "add-load",
+            "--duration",
+            "10",
+        ]
+    )
+    assert args.top_k == 20
+    assert not hasattr(_build_scenario(args), "top_k")
+
 
 def test_cli_cleanup_subcommand(tmp_path):
     parser = build_parser()

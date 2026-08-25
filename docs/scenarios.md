@@ -56,7 +56,7 @@ A scenario emits `Op`s of two kinds, carried over the `LTMClient` contract:
   ids returned as `n_items`.
 - **SEARCH** — `client.search(user, query: QueryItem) -> list[ResultItem]`.
   Retrieves memories scoped to this user only. The `QueryItem` carries a
-  `query` string and a `top_k` (default 20). One `search` op records the
+  `query` string and a `top_k` (default 20, set via `--top-k`). One `search` op records the
   number of results returned as `n_items`.
 
 Per-request recording: `op_type`, `user_id`, `started_at`, `ended_at`,
@@ -91,7 +91,8 @@ carries one item and becomes one request.
 **`search` data — content-derived queries.** Search queries are **not**
 taken from a dataset evaluation question. `search-load` and `mixed`
 build the query pool from the user's own `memory_stream` items (one
-`QueryItem` per stored unit, `query` = the item's content, `top_k` 20). The
+`QueryItem` per stored unit, `query` = the item's content, `top_k` from
+`--top-k`, default 20). The
 pool is therefore as large as the memory stream, so cycling it does not
 naively repeat a single query — important because a tiny, fixed query pool
 would warm a server's result cache and understate search latency. The pool
@@ -188,13 +189,14 @@ interleaves them.
 think)` (default 0.05). Both user and assistant turns are added identically
 (episodic, `producer` = user id).
 **search:** one per recall-firing user turn, `query` = that turn's first
-chunk's content, `top_k` 20, `delay = uniform(0, think)`. The query pool is
-**not** used — queries come from the turn stream.
+chunk's content, `top_k` from `--top-k` (default 20), `delay = uniform(0, think)`.
+The query pool is **not** used — queries come from the turn stream.
 
 **Parameters:** `--think` (default 0.05), `--search-every N` (default 1 =
-recall before every user turn; N>1 recalls only every Nth user turn). The
-user-turn counter resets each replay pass, so each pass is an independent,
-reproducible chat session with the same recall pattern.
+recall before every user turn; N>1 recalls only every Nth user turn), `--top-k`
+(default 20, recall search depth). The user-turn counter resets each replay
+pass, so each pass is an independent, reproducible chat session with the same
+recall pattern.
 
 **LLM answer time and user think time** (`--answer-time`, `--user-gap`, both
 default 0 = back-to-back): a real chatbot does not loop back-to-back — after
@@ -278,7 +280,8 @@ measured run, so **memory must already be present** (use `--preingest`).
 **search:** each query carries a small think time
 (`delay = uniform(0, 0.02)`) so users drift out of lockstep. The query pool
 is the user's own memory contents, cycled with a rotating per-pass start
-offset so passes are not identical. `top_k` from the `QueryItem` (default 20).
+offset so passes are not identical. `top_k` comes from the `QueryItem`
+(set via `--top-k`, default 20).
 
 **add:** none during measurement.
 
@@ -341,7 +344,7 @@ count.
 
 **add:** when not a search, one item per op, `delay = uniform(0, think)`.
 **search:** query from the content-derived pool (the user's own memory
-contents), cycled, `top_k` default 20, `delay = uniform(0, think)`.
+contents), cycled, `top_k` from `--top-k` (default 20), `delay = uniform(0, think)`.
 
 **Parameters:** `--search-weight` (default 0.8, forwarded to the scenario
 constructor), `--think` (default 0.05). The open-model knobs `--arrival-rate`,
@@ -411,7 +414,7 @@ op typically becomes one request.
 ```
 org_id, project_id
 query: <string>
-top_k: 20                      # from the QueryItem
+top_k: 20                      # from the QueryItem (--top-k, default 20)
 types: ["episodic"]
 ```
 

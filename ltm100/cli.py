@@ -49,11 +49,15 @@ def _build_scenario(args: argparse.Namespace):
     if args.scenario == "mixed":
         kwargs["search_weight"] = args.search_weight
         kwargs["think"] = args.think
+        kwargs["top_k"] = args.top_k
     elif args.scenario == "chat-replay":
         kwargs["think"] = args.think
         kwargs["search_every"] = args.search_every
         kwargs["answer_time"] = args.answer_time
         kwargs["user_gap"] = args.user_gap
+        kwargs["top_k"] = args.top_k
+    elif args.scenario == "search-load":
+        kwargs["top_k"] = args.top_k
     return get_scenario(args.scenario, **kwargs)
 
 
@@ -168,6 +172,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.8,
         help="mixed scenario: fraction of ops that are search (0..1)",
+    )
+    run.add_argument(
+        "--top-k",
+        type=int,
+        default=20,
+        help="search top_k: how many memories the backend returns per search "
+        "(search-load, mixed, chat-replay; default 20). Applied uniformly to "
+        "all users",
     )
     run.add_argument(
         "--think",

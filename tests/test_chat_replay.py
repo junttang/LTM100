@@ -268,3 +268,28 @@ async def test_chat_replay_rejects_negative_timing_params():
         ChatReplay(answer_time=-0.1)
     with pytest.raises(ValueError, match="user_gap"):
         ChatReplay(user_gap=-0.1)
+
+
+@pytest.mark.asyncio
+async def test_chat_replay_top_k_forwarded_to_recall_queries():
+    """--top-k controls the recall search depth: the QueryItem.top_k of every
+    recall SEARCH reflects the configured top_k (default 20, overridable)."""
+    import itertools
+
+    ds = DialogueDataset()
+    # default -> 20
+    plan = ChatReplay(think=0.0).plan("u0", ds, {"seed": 0})
+    default_op = next(op for op in plan if op.type == OpType.SEARCH)
+    assert default_op.query.top_k == 20
+    # overridden -> 5
+    plan = ChatReplay(think=0.0, top_k=5).plan("u0", ds, {"seed": 0})
+    override_op = next(op for op in plan if op.type == OpType.SEARCH)
+    assert override_op.query.top_k == 5
+
+
+@pytest.mark.asyncio
+async def test_chat_replay_rejects_nonpositive_top_k():
+    with pytest.raises(ValueError, match="top_k"):
+        ChatReplay(top_k=0)
+    with pytest.raises(ValueError, match="top_k"):
+        ChatReplay(top_k=-1)

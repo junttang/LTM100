@@ -102,6 +102,33 @@ async def test_search_load_emits_searches_only():
 
 
 @pytest.mark.asyncio
+async def test_search_load_top_k_forwarded():
+    """--top-k (a scenario constructor param) reaches the backend as
+    QueryItem.top_k on every search op."""
+    from ltm100.common import QueryItem
+
+    seen_top_k: list[int] = []
+
+    class TopKCapture(FakeBackend):
+        async def search(self, user: UserId, query: QueryItem):
+            seen_top_k.append(query.top_k)
+            return await super().search(user, query)
+
+    ds = FakeDataset(n_memories=10)
+    backend = TopKCapture()
+    cfg = RunConfig(users=1, ops=4, seed=0)
+    runner = LoadRunner(client=backend, dataset=ds, scenario=SearchLoad(top_k=7), config=cfg)
+    await runner.run()
+    assert seen_top_k == [7, 7, 7, 7]
+    # default is 20
+    seen_top_k.clear()
+    backend2 = TopKCapture()
+    runner2 = LoadRunner(client=backend2, dataset=ds, scenario=SearchLoad(), config=cfg)
+    await runner2.run()
+    assert all(k == 20 for k in seen_top_k)
+
+
+@pytest.mark.asyncio
 async def test_chat_replay_mixed_emits_both():
     """chat-replay interleaves recall (search) and ingestion (add): with
     search_every=1 every user turn issues a search, so both op types appear."""

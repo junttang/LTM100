@@ -49,13 +49,13 @@ def _seed_for(seed: int, user: str) -> int:
     return h
 
 
-def _content_queries(memories: list[MemoryItem]) -> list[QueryItem]:
+def _content_queries(memories: list[MemoryItem], top_k: int = 20) -> list[QueryItem]:
     """Content-derived search queries, one per memory item.
 
     The pool is as large as the memory stream, so cycling it does not
     naively repeat a single query (which would warm a server result cache and
     understate latency). Each query is the memory item's own content."""
-    return [QueryItem(query=m.content, top_k=20) for m in memories]
+    return [QueryItem(query=m.content, top_k=top_k) for m in memories]
 
 
 class AddLoad:
@@ -88,10 +88,16 @@ class SearchLoad:
     user's own stored content. The query pool is built from the user's
     `memory_stream`; each pass through the pool starts at a rotating offset
     so passes are not identical, and a small think time per op drifts users
-    out of lockstep. The plan is infinite; the runner bounds it via
-    duration/ops (closed) or session_ops (open)."""
+    out of lockstep. `top_k` (default 20) sets the search depth. The plan is
+    infinite; the runner bounds it via duration/ops (closed) or session_ops
+    (open)."""
 
     name = "search-load"
+
+    def __init__(self, top_k: int = 20) -> None:
+        if top_k <= 0:
+            raise ValueError("top_k must be > 0")
+        self.top_k = top_k
 
     def plan(
         self,
@@ -100,7 +106,7 @@ class SearchLoad:
         rng_state: dict[str, Any],
     ) -> Iterator[Op]:
         rng = random.Random(_seed_for(rng_state.get("seed", 0), user))
-        queries = _content_queries(list(dataset.memory_stream(user)))
+        queries = _content_queries(list(dataset.memory_stream(user)), self.top_k)
         n = len(queries)
         if n == 0:
             return
@@ -134,11 +140,16 @@ class Mixed:
 
     name = "mixed"
 
-    def __init__(self, search_weight: float = 0.8, think: float = 0.05) -> None:
+    def __init__(
+        self, search_weight: float = 0.8, think: float = 0.05, top_k: int = 20
+    ) -> None:
         if not 0.0 <= search_weight <= 1.0:
             raise ValueError("search_weight must be in [0, 1]")
+        if top_k <= 0:
+            raise ValueError("top_k must be > 0")
         self.search_weight = search_weight
         self.think = think
+        self.top_k = top_k
 
     def plan(
         self,
@@ -150,7 +161,7 @@ class Mixed:
         memories = list(dataset.memory_stream(user))
         if not memories:
             return
-        queries = _content_queries(memories)
+        queries = _content_queries(memories, self.top_k)
         i_add = 0
         i_q = 0
         # Infinite: the runner bounds consumption per session / over duration.
@@ -214,6 +225,11 @@ class ChatReplay:
     `answer_time` only takes effect when there is a following assistant turn;
     `user_gap` only between turns (never before the very first turn of a
     replay pass, so each pass starts cleanly).
+
+    `top_k` (default 20) is the recall search depth — how many memories the
+    backend returns per recall. Larger values raise the retrieve/serialize cost
+    of each search. Applies uniformly to all users (a per-user ratio is a
+    planned follow-up).
     """
 
     name = "chat-replay"
@@ -224,6 +240,7 @@ class ChatReplay:
         search_every: int = 1,
         answer_time: float = 0.0,
         user_gap: float = 0.0,
+        top_k: int = 20,
     ) -> None:
         self.think = think
         self.search_every = max(1, int(search_every))
@@ -231,8 +248,11 @@ class ChatReplay:
             raise ValueError("answer_time must be >= 0")
         if user_gap < 0:
             raise ValueError("user_gap must be >= 0")
+        if top_k <= 0:
+            raise ValueError("top_k must be > 0")
         self.answer_time = answer_time
         self.user_gap = user_gap
+        self.top_k = top_k
 
     def validate(self, dataset: DatasetAdapter) -> None:
         if not hasattr(dataset, "turn_stream"):
@@ -271,7 +291,7 @@ class ChatReplay:
                         turn_ops.append(
                             Op(
                                 type=OpType.SEARCH,
-                                query=QueryItem(query=first_content, top_k=20),
+                                query=QueryItem(query=first_content, top_k=self.top_k),
                                 delay=rng.uniform(0.0, self.think),
                             )
                         )

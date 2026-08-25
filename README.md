@@ -264,6 +264,8 @@ ltm100 run --config examples/memmachine-mcp.yaml \
 - `--global-concurrency N`: cap total in-flight ops (0 = no cap).
 - `--rampup SECONDS`: stagger user start to avoid a thundering herd.
 - `--search-weight F`: (mixed) fraction of ops that are search (0..1).
+- `--top-k N`: (search-load, mixed, chat-replay) how many memories the
+  backend returns per search (default 20). Applied to all users.
 - `--think SECONDS`: (mixed, chat-replay) max think-time jitter per op.
 - `--search-every N`: (chat-replay) issue a recall search every N user turns
   (default 1 = every user turn).
