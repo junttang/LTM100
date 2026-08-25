@@ -145,6 +145,10 @@ is the most realistic chatbot load (Poisson-arriving sessions, each replaying
 a slice of the conversation with the congestion policy in effect). The
 recall cadence and turn content are identical in both.
 
+For the load-model mechanics in depth (the closed loop vs the arrival
+process, the congestion/rejection policy, and when to use each model), see
+[`load-models.md`](./load-models.md).
+
 ### Op mix ownership
 
 The op mix (add vs search) is owned by the scenario for **both** load models.

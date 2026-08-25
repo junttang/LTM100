@@ -201,6 +201,10 @@ Both models reduce to "a virtual user coroutine emits requests over time";
 the difference is the *emit schedule* (closed: think-time loop; open:
 inter-arrival). The runner is the same; the Scenario provides the schedule.
 
+See [`docs/load-models.md`](./docs/load-models.md) for the implemented
+mechanics (closed loop, Poisson arrivals, the bounded-queue rejection
+policy) and when to use each model.
+
 ## 6. Scenarios
 
 A Scenario decides, per virtual user, the **op mix** and **emit schedule**.

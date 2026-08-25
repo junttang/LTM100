@@ -11,7 +11,10 @@ not retrieval or answer quality. There are no precision/recall/MRR metrics.
 Server-side resource metrics (CPU, memory, etc.) are collected separately by
 the server itself.
 
-For the full design, see [`DESIGN.md`](./DESIGN.md).
+For the full design, see [`DESIGN.md`](./DESIGN.md). Topic docs live under
+[`docs/`](./docs/): [`docs/scenarios.md`](./docs/scenarios.md) for the
+per-scenario data flow, [`docs/load-models.md`](./docs/load-models.md) for
+the closed/open load models and the congestion policy.
 
 ## Status
 
@@ -130,17 +133,30 @@ isolated to one section) — see [`docs/scenarios.md`](./docs/scenarios.md).
 
 ## Load models
 
-- **Closed** (`--model closed`, default): a fixed number of virtual users,
-  each looping its scenario plan with in-flight = 1 per user. An optional
-  `--global-concurrency` cap bounds total in-flight ops. Because every
-  scenario's plan wraps its data stream, a `--duration` run sustains load
-  instead of going idle once a finite stream is exhausted.
+A **load model** is the consume schedule — when and how many users emit the
+scenario's ops. It is an axis *independent* of the scenario: the scenario
+owns the op mix and data, the runner owns the schedule. Every scenario runs
+under both models.
+
+- **Closed** (`--model closed`, default): a fixed pool of `--users N`
+  virtual users, each looping its plan with in-flight = 1 per user (send,
+  await response, think, next). An optional `--global-concurrency` cap
+  bounds total in-flight ops. Concurrency is fixed at N — use it to measure
+  peak throughput/latency at a fixed concurrency.
 - **Open** (`--model open`): users arrive per a Poisson process
   (`--arrival-rate`), each running `--session-ops` ops then leaving.
   Concurrency is emergent (a function of arrival rate vs service rate). A
   `--queue-bound` beyond the global concurrency cap controls how many
   requests queue before being **rejected** (`status=rejected`,
-  `error_kind=queue_full`, zero latency).
+  `error_kind=queue_full`, zero latency) — the rejection rate and the
+  arrival rate where it starts are the open model's key output. Use it to
+  find the overload threshold.
+
+Because every scenario's plan wraps its data stream, a `--duration` run
+sustains load instead of going idle once a finite stream is exhausted.
+
+For the full mechanics (closed loop vs arrival process, the congestion
+policy, and when to use which) see [`docs/load-models.md`](./docs/load-models.md).
 
 ## Quick start
 
