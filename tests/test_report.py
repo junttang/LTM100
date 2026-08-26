@@ -30,6 +30,14 @@ def test_write_summary_json_roundtrips(tmp_path):
     assert data["meta"]["users"] == 2
     assert data["summary"]["total"] == 3
     assert set(data["summary"]["by_op"]) == {"add", "search"}
+    # Overall throughput/QPS at the top level (total / wall_seconds).
+    assert data["summary"]["throughput_ops_s"] > 0.0
+    assert data["summary"]["qps"] == data["summary"]["throughput_ops_s"]
+    # Empty results still expose the overall throughput keys.
+    empty = aggregate([])
+    assert empty["total"] == 0
+    assert empty["throughput_ops_s"] == 0.0
+    assert empty["qps"] == 0.0
 
 
 def test_write_summary_csv_has_rows_per_op(tmp_path):
@@ -40,7 +48,14 @@ def test_write_summary_csv_has_rows_per_op(tmp_path):
         rows = list(csv.reader(f))
     assert rows[0][0] == "op_type"
     op_types = {r[0] for r in rows[1:]}
-    assert op_types == {"add", "search"}
+    assert op_types == {"add", "search", "all"}
+    # The overall "all" row carries the top-level throughput/qps and blanks the
+    # (ambiguous) latency cells.
+    all_row = next(r for r in rows[1:] if r[0] == "all")
+    assert all_row[1] == "3"  # count
+    assert all_row[2] == f"{summary['throughput_ops_s']:.4f}"
+    assert all_row[3] == f"{summary['qps']:.4f}"
+    assert all_row[4] == ""  # latency_mean blank
 
 
 def test_write_raw_ndjson_one_line_per_result(tmp_path):

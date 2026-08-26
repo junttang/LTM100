@@ -261,11 +261,13 @@ Per-request recorded fields: `op_type`, `user_id`, `started_at`, `ended_at`,
 (optional).
 
 Aggregated summary:
-- Count per op type.
-- Throughput (ops/s) per op type.
-- QPS (total and per op type).
-- Latency: mean, p50, p90, p95, p99, max per op type.
-- Error rate (% and by kind).
+- Total count across op types and wall-clock seconds.
+- Overall throughput/QPS = total / wall_seconds at the top level (the overall
+  view reports throughput only; mixing add/search latencies into one latency
+  distribution is ambiguous, so overall latency percentiles are not computed).
+- Per op type: count, throughput (ops/s), QPS, latency (mean, p50, p90, p95,
+  p99, max), and error rate.
+- Error rate overall and by kind.
 - Concurrency (observed concurrent in-flight over time, for open model).
 
 Recording:

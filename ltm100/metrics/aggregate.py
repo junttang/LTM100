@@ -1,8 +1,10 @@
 """Post-run aggregation of per-request results into a summary.
 
 Computes count, throughput (ops/s), QPS, and latency percentiles (p50/p90/
-p95/p99/max), broken down by op type, plus overall error rate. Pure function
-over a list of OpResult.
+p95/p99/max), broken down by op type, plus an overall total throughput/QPS and
+error rate. Per-op latency percentiles are kept separate from the top-level
+summary because mixing add/search latencies into one distribution is ambiguous;
+the overall view reports throughput only. Pure function over a list of OpResult.
 """
 
 from __future__ import annotations
@@ -40,7 +42,14 @@ def _percentiles(values: list[float]) -> dict[str, float]:
 def aggregate(results: Iterable[OpResult]) -> dict:
     results = list(results)
     if not results:
-        return {"total": 0, "by_op": {}, "error_rate": 0.0, "wall_seconds": 0.0}
+        return {
+            "total": 0,
+            "throughput_ops_s": 0.0,
+            "qps": 0.0,
+            "by_op": {},
+            "error_rate": 0.0,
+            "wall_seconds": 0.0,
+        }
 
     by_op: dict[str, list[OpResult]] = defaultdict(list)
     for r in results:
@@ -70,8 +79,12 @@ def aggregate(results: Iterable[OpResult]) -> dict:
             "error_rate": errors / len(items) if items else 0.0,
         }
 
+    overall_throughput = total / wall if wall > 0 else 0.0
+
     return {
         "total": total,
+        "throughput_ops_s": overall_throughput,
+        "qps": overall_throughput,
         "by_op": summary_by_op,
         "error_rate": total_errors / total if total else 0.0,
         "wall_seconds": round(wall, 6),

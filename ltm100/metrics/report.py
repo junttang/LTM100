@@ -27,7 +27,13 @@ def write_summary_json(
 
 
 def write_summary_csv(summary: dict[str, Any], path: str | Path) -> None:
-    """Write one row per op type with the key metrics."""
+    """Write one row per op type with the key metrics, plus an overall row.
+
+    The overall ``all`` row aggregates across op types: its throughput/qps come
+    from the top-level summary, and its latency cells are intentionally left
+    blank because mixing add/search latencies into one distribution is
+    ambiguous (see aggregate.py).
+    """
     by_op = summary.get("by_op", {})
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
@@ -66,6 +72,26 @@ def write_summary_csv(summary: dict[str, Any], path: str | Path) -> None:
                     f"{m.get('error_rate', 0.0):.4f}",
                 ]
             )
+        # Overall row across all op types. Latency cells are blank (ambiguous
+        # to mix add/search latencies); throughput/qps come from the top level.
+        total = summary.get("total", 0)
+        total_errors = sum(m.get("errors", 0) for m in by_op.values())
+        w.writerow(
+            [
+                "all",
+                total,
+                f"{summary.get('throughput_ops_s', 0.0):.4f}",
+                f"{summary.get('qps', 0.0):.4f}",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                total_errors,
+                f"{summary.get('error_rate', 0.0):.4f}",
+            ]
+        )
 
 
 def write_raw_ndjson(results: list[OpResult], path: str | Path) -> None:

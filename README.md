@@ -201,9 +201,12 @@ Additional backends (e.g. Mem0) and how to add a new one are described in
 
 With `--output DIR`, LTM100 writes:
 
-- `summary.json` — aggregated metrics (count, throughput, QPS, latency
-  percentiles p50/p90/p95/p99/max, error rate) per op type, plus run meta.
-- `summary.csv` — the same summary as a flat table.
+- `summary.json` — aggregated metrics: an overall total throughput/QPS at the
+  top level, plus count, throughput, QPS, latency percentiles p50/p90/p95/p99/max,
+  and error rate per op type, plus run meta.
+- `summary.csv` — the same summary as a flat table, with an overall `all` row
+  (throughput/qps only; latency cells blank since mixing add/search latencies is
+  ambiguous).
 - `raw.ndjson` (with `--raw`) — one line per request.
 
 ## Cleanup per-user state
