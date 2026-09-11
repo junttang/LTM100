@@ -39,6 +39,11 @@ class QueryItem:
 
     query: str
     top_k: int = 20
+    # Server-side search knobs. Both are inert at their defaults: the backend
+    # omits them from the payload, so the request is byte-identical to one
+    # built without them.
+    expand_context: int = 0
+    filter: str = ""
     expected: dict[str, Any] = field(default_factory=dict)
 
 

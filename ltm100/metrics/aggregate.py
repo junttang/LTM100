@@ -2,7 +2,10 @@
 
 Computes count, throughput (ops/s), QPS, and latency percentiles (p50/p90/
 p95/p99/max), broken down by op type, plus an overall total throughput/QPS and
-error rate. Per-op latency percentiles are kept separate from the top-level
+error rate. Each op type also reports how many items it moved: for search that
+is results returned, so `empty_rate` distinguishes a run that searched
+successfully from one where every query returned nothing — both of which have
+an error rate of zero. Per-op latency percentiles are kept separate from the top-level
 summary because mixing add/search latencies into one distribution is ambiguous;
 the overall view reports throughput only. Pure function over a list of OpResult.
 """
@@ -65,6 +68,8 @@ def aggregate(results: Iterable[OpResult]) -> dict:
     for op_type, items in by_op.items():
         latencies_ms = [(r.ended_at - r.started_at) * 1000.0 for r in items]
         errors = sum(1 for r in items if r.status != "ok")
+        ok = [r for r in items if r.status == "ok"]
+        empty = sum(1 for r in ok if r.n_items == 0)
         total += len(items)
         total_errors += errors
         summary_by_op[op_type] = {
@@ -77,6 +82,11 @@ def aggregate(results: Iterable[OpResult]) -> dict:
             },
             "errors": errors,
             "error_rate": errors / len(items) if items else 0.0,
+            "items": {
+                "mean": sum(r.n_items for r in ok) / len(ok) if ok else 0.0,
+                "empty": empty,
+                "empty_rate": empty / len(ok) if ok else 0.0,
+            },
         }
 
     overall_throughput = total / wall if wall > 0 else 0.0

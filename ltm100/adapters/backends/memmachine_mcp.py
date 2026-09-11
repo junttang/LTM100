@@ -124,6 +124,15 @@ class MemMachineMcpClient:
         # add_memory takes a single content string per call, so we issue one
         # tool call per memory item (the MCP tool has no batch form). The
         # tool returns a success McpResponse with no ids.
+        # The add_memory tool takes no metadata field, so carrying any here
+        # would drop it silently and then a metadata filter would select
+        # nothing for reasons invisible in the results.
+        if any(item.metadata for item in items):
+            raise ValueError(
+                "the MCP backend cannot store item metadata: add_memory has no "
+                "field for it. Use the memmachine (REST) backend for a corpus "
+                "that sets metadata, e.g. the synthetic dataset's categories."
+            )
         uids: list[str] = []
         for item in items:
             payload = {
@@ -146,6 +155,14 @@ class MemMachineMcpClient:
 
     async def search(self, user: UserId, query: QueryItem) -> list[ResultItem]:
         org_id, project_id = self._tenant(user)
+        # search_memory exposes neither knob. Ignoring them would report a
+        # baseline search under the label of a filtered or expanded one.
+        if query.expand_context or query.filter:
+            raise ValueError(
+                "the MCP backend supports neither --expand nor --filter: "
+                "search_memory takes only query and top_k. Use the memmachine "
+                "(REST) backend for those arms."
+            )
         payload = {
             "query": query.query,
             "top_k": query.top_k,

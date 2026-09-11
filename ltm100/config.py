@@ -25,7 +25,6 @@ from typing import Any
 import yaml
 
 from ltm100.adapters.backends.memmachine import MemMachineClient
-from ltm100.adapters.backends.memmachine_mcp import MemMachineMcpClient
 from ltm100.adapters.datasets.longmemeval import LongMemEvalAdapter
 from ltm100.adapters.datasets.synthetic import SyntheticAdapter
 from ltm100.common import DatasetAdapter, LTMClient
@@ -75,8 +74,13 @@ _DATASET_REGISTRY: dict[str, type] = {
 
 _BACKEND_REGISTRY: dict[str, type] = {
     MemMachineClient.name: MemMachineClient,
-    MemMachineMcpClient.name: MemMachineMcpClient,
 }
+
+
+def _mcp_backend() -> type:
+    from ltm100.adapters.backends.memmachine_mcp import MemMachineMcpClient
+
+    return MemMachineMcpClient
 
 
 def build_dataset(cfg: AdapterConfig) -> DatasetAdapter:
@@ -87,6 +91,10 @@ def build_dataset(cfg: AdapterConfig) -> DatasetAdapter:
 
 
 def build_backend(cfg: AdapterConfig) -> LTMClient:
+    # Deferred so that fastmcp, which ships only in the [mcp] extra, is
+    # required only by a run that actually selects the MCP backend.
+    if cfg.name == "memmachine-mcp":
+        return _mcp_backend()(**cfg.options)
     cls = _BACKEND_REGISTRY.get(cfg.name)
     if cls is None:
         raise ValueError(f"unknown backend adapter: {cfg.name}")

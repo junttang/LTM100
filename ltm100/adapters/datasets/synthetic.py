@@ -28,9 +28,14 @@ class SyntheticAdapter:
         self,
         memories_per_user: int = 100,
         content_chars: int = 200,
+        categories: int = 0,
     ) -> None:
         self.memories_per_user = max(1, memories_per_user)
         self.content_chars = max(1, content_chars)
+        # A field for --filter to select on. 0 leaves metadata empty, so the
+        # corpus is byte-identical to one built without this option; N spreads
+        # items over N values, so a single-value filter selects about 1/N.
+        self.categories = max(0, categories)
 
     def _user_rng(self, user: UserId, seed: int) -> random.Random:
         h = (seed * 1_000_003) & 0xFFFFFFFF
@@ -45,7 +50,12 @@ class SyntheticAdapter:
         rng = self._user_rng(user + "::mem", 0)
         for i in range(self.memories_per_user):
             content = f"{user} memory {i}: " + _filler(rng, self.content_chars)
-            yield MemoryItem(content=content, producer=user)
+            # cat_<i mod N>, the same naming the REST bench uses, so a filter
+            # expression is comparable between the two harnesses.
+            metadata = (
+                {"category": f"cat_{i % self.categories}"} if self.categories else {}
+            )
+            yield MemoryItem(content=content, producer=user, metadata=metadata)
 
 
 def _filler(rng: random.Random, n: int) -> str:

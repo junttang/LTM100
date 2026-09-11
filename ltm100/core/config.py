@@ -48,12 +48,29 @@ class RunConfig:
     arrival_rate: float = 0.0
     session_ops: int = 0
     queue_bound: int = 0
+    # Multi-process load generation. One asyncio process saturates a core well
+    # before the server does, so beyond a few dozen users a single-process run
+    # measures the generator rather than the target. procs > 1 shards the users
+    # across OS processes; procs == 1 is the original single-process topology.
+    procs: int = 1
+    proc_index: int = 0
 
     def __post_init__(self) -> None:
         if self.duration <= 0 and self.ops <= 0:
             raise ValueError("either duration or ops must be > 0")
         if self.users <= 0:
             raise ValueError("users must be > 0")
+        if self.procs < 1:
+            raise ValueError(f"procs must be >= 1, got {self.procs}")
+        if not 0 <= self.proc_index < self.procs:
+            raise ValueError(
+                f"proc_index must be in [0, {self.procs}), got {self.proc_index}"
+            )
+        if self.procs > self.users:
+            raise ValueError(
+                f"procs ({self.procs}) exceeds users ({self.users}); "
+                "some shards would have no work"
+            )
         if self.model not in ("closed", "open"):
             raise ValueError(f"model must be 'closed' or 'open', got {self.model!r}")
         if self.model == "open":

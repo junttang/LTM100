@@ -6,6 +6,7 @@ implement LTMClient directly and ignore this layer.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import aiohttp
@@ -25,11 +26,15 @@ class RestTransport:
         *,
         headers: dict[str, str] | None = None,
         timeout: float = 60.0,
+        retries: int = 0,
+        retry_backoff: float = 0.5,
     ) -> None:
         # Strip trailing slash so paths join cleanly.
         self.base_url = base_url.rstrip("/")
         self.headers = headers or {}
         self.timeout = aiohttp.ClientTimeout(total=timeout)
+        self.retries = retries
+        self.retry_backoff = retry_backoff
         self._session: aiohttp.ClientSession | None = None
 
     async def __aenter__(self) -> "RestTransport":
@@ -53,6 +58,28 @@ class RestTransport:
         self._session = None
 
     async def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        assert self._session is not None, "transport not opened"
+        attempt = 0
+        while True:
+            try:
+                return await self._once(method, path, json=json, params=params)
+            except (asyncio.TimeoutError, aiohttp.ClientConnectionError):
+                # Only connection-level failures are retried. An HTTP error
+                # status is a real answer from the server and belongs in the
+                # results; retrying it would understate the error rate.
+                if attempt >= self.retries:
+                    raise
+                await asyncio.sleep(self.retry_backoff * (2 ** attempt))
+                attempt += 1
+
+    async def _once(
         self,
         method: str,
         path: str,

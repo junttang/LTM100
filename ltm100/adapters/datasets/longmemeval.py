@@ -24,10 +24,21 @@ huggingface_hub when the loader hits schema incompatibilities.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Iterator
 
 from ltm100.common import DatasetAdapter, MemoryItem, Turn, UserId
+
+logger = logging.getLogger(__name__)
+
+_EVENT_TYPES = {
+    "start_map": "dict",
+    "string": "str",
+    "number": "number",
+    "boolean": "bool",
+    "null": "NoneType",
+}
 
 
 def _split_chunks(text: str, max_chars: int = 3000) -> list[str]:
@@ -103,12 +114,53 @@ class LongMemEvalAdapter:
         # Expand `~` so configs can use a home-relative path (e.g.
         # `path: ~/longmemeval/longmemeval_s_cleaned.json`).
         resolved = str(Path(path).expanduser())
-        with open(resolved, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-        if not isinstance(raw, list):
-            raise TypeError(f"Expected list data in {path}, got {type(raw).__name__}.")
-        records = raw[: self.length] if self.length is not None else raw
+        records = self._stream_local(resolved, path)
+        if records is None:
+            with open(resolved, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if not isinstance(raw, list):
+                raise TypeError(
+                    f"Expected list data in {path}, got {type(raw).__name__}."
+                )
+            records = raw[: self.length] if self.length is not None else raw
         return self._normalize(records)
+
+    def _stream_local(self, resolved: str, path: str) -> list[dict[str, Any]] | None:
+        """Read at most `length` samples without materialising the document.
+
+        json.load builds the whole file before any slice is taken: the 2.6 GB
+        longmemeval_m split measured at 24 GB RSS to read twenty
+        conversations, and every --procs shard pays that again. Returns None
+        when ijson is absent, leaving the caller to fall back.
+        """
+        try:
+            import ijson
+        except ImportError:
+            logger.warning(
+                "ijson not installed; loading %s with json.load, which holds "
+                "the whole file in memory. pip install ijson",
+                resolved,
+            )
+            return None
+
+        records: list[dict[str, Any]] = []
+        with open(resolved, "rb") as f:
+            # A non-array document yields no "item" events, which would look
+            # like an empty dataset rather than the type error it is.
+            first = next(ijson.parse(f), None)
+            if first is None or first[1] != "start_array":
+                raise TypeError(
+                    f"Expected list data in {path}, got "
+                    f"{_EVENT_TYPES.get(first[1], 'unknown') if first else 'empty'}."
+                )
+            f.seek(0)
+            for item in ijson.items(f, "item", use_float=True):
+                # Check before appending: length=0 must yield nothing, which is
+                # what the json.load path's raw[:0] does.
+                if self.length is not None and len(records) >= self.length:
+                    break
+                records.append(item)
+        return records
 
     def _load_hf(self) -> list[dict[str, Any]]:
         split_file = (

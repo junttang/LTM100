@@ -13,6 +13,7 @@ authors = [{ name = "Junhyuok Park", email = "junhyeok0.park@sk.com" }]
 dependencies = [
     "aiohttp>=3.9",
     "pyyaml>=6.0",
+    "ijson>=3.2",
 ]
 
 [project.optional-dependencies]

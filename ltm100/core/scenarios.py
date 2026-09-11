@@ -33,9 +33,52 @@ from __future__ import annotations
 import random
 from dataclasses import replace
 from typing import Any, Iterator
+from weakref import WeakKeyDictionary
 
 from ltm100.common import DatasetAdapter, MemoryItem, QueryItem, UserId
 from ltm100.core.op import Op, OpType, Scenario
+
+
+_MEMO: "WeakKeyDictionary[DatasetAdapter, dict[UserId, list[MemoryItem]]]" = (
+    WeakKeyDictionary()
+)
+
+
+def _memories(dataset: DatasetAdapter, user: UserId) -> list[MemoryItem]:
+    """Materialize a user's stream once per run, not once per session.
+
+    The runner plans a session inside `_open_session`, on the event loop. Under
+    `--model open` a session opens per arrival, so an uncached build costs
+    `arrival_rate` x build-time per second of wall clock; past 1.0 the loop
+    stops reading sockets and the run wedges (50k episodes build in ~0.47s, so
+    --arrival-rate 20 demands 9.4x the loop). The stream is deterministic in
+    (user, seed), so one build per user is equivalent. Cost is one corpus per
+    live user, which the memory-scaling arms bound by running --users 1.
+    """
+    per_user = _MEMO.setdefault(dataset, {})
+    cached = per_user.get(user)
+    if cached is None:
+        cached = per_user[user] = list(dataset.memory_stream(user))
+    return cached
+
+
+def _query_pool(scenario: Any, dataset: DatasetAdapter, user: UserId) -> list[QueryItem]:
+    """Cache the per-user query pool on the scenario instance.
+
+    `_content_queries` builds one QueryItem per stored unit, so rebuilding it
+    per session costs the same order as the corpus build itself (see
+    `_memories`). The pool depends only on the user and the scenario's fixed
+    top_k/expand_context/filter."""
+    cache = scenario.__dict__.setdefault("_query_cache", {})
+    pool = cache.get(user)
+    if pool is None:
+        pool = cache[user] = _content_queries(
+            _memories(dataset, user),
+            scenario.top_k,
+            scenario.expand_context,
+            scenario.filter,
+        )
+    return pool
 
 
 def _seed_for(seed: int, user: str) -> int:
@@ -49,13 +92,26 @@ def _seed_for(seed: int, user: str) -> int:
     return h
 
 
-def _content_queries(memories: list[MemoryItem], top_k: int = 20) -> list[QueryItem]:
+def _content_queries(
+    memories: list[MemoryItem],
+    top_k: int = 20,
+    expand_context: int = 0,
+    filter: str = "",
+) -> list[QueryItem]:
     """Content-derived search queries, one per memory item.
 
     The pool is as large as the memory stream, so cycling it does not
     naively repeat a single query (which would warm a server result cache and
     understate latency). Each query is the memory item's own content."""
-    return [QueryItem(query=m.content, top_k=top_k) for m in memories]
+    return [
+        QueryItem(
+            query=m.content,
+            top_k=top_k,
+            expand_context=expand_context,
+            filter=filter,
+        )
+        for m in memories
+    ]
 
 
 class AddLoad:
@@ -72,7 +128,7 @@ class AddLoad:
         dataset: DatasetAdapter,
         rng_state: dict[str, Any],
     ) -> Iterator[Op]:
-        memories = list(dataset.memory_stream(user))
+        memories = _memories(dataset, user)
         if not memories:
             return
         i = 0
@@ -94,10 +150,16 @@ class SearchLoad:
 
     name = "search-load"
 
-    def __init__(self, top_k: int = 20) -> None:
+    def __init__(
+        self, top_k: int = 20, expand_context: int = 0, filter: str = ""
+    ) -> None:
         if top_k <= 0:
             raise ValueError("top_k must be > 0")
+        if expand_context < 0:
+            raise ValueError("expand_context must be >= 0")
         self.top_k = top_k
+        self.expand_context = expand_context
+        self.filter = filter
 
     def plan(
         self,
@@ -106,7 +168,7 @@ class SearchLoad:
         rng_state: dict[str, Any],
     ) -> Iterator[Op]:
         rng = random.Random(_seed_for(rng_state.get("seed", 0), user))
-        queries = _content_queries(list(dataset.memory_stream(user)), self.top_k)
+        queries = _query_pool(self, dataset, user)
         n = len(queries)
         if n == 0:
             return
@@ -141,15 +203,24 @@ class Mixed:
     name = "mixed"
 
     def __init__(
-        self, search_weight: float = 0.8, think: float = 0.05, top_k: int = 20
+        self,
+        search_weight: float = 0.8,
+        think: float = 0.05,
+        top_k: int = 20,
+        expand_context: int = 0,
+        filter: str = "",
     ) -> None:
         if not 0.0 <= search_weight <= 1.0:
             raise ValueError("search_weight must be in [0, 1]")
         if top_k <= 0:
             raise ValueError("top_k must be > 0")
+        if expand_context < 0:
+            raise ValueError("expand_context must be >= 0")
         self.search_weight = search_weight
         self.think = think
         self.top_k = top_k
+        self.expand_context = expand_context
+        self.filter = filter
 
     def plan(
         self,
@@ -158,10 +229,10 @@ class Mixed:
         rng_state: dict[str, Any],
     ) -> Iterator[Op]:
         rng = random.Random(_seed_for(rng_state.get("seed", 0), user))
-        memories = list(dataset.memory_stream(user))
+        memories = _memories(dataset, user)
         if not memories:
             return
-        queries = _content_queries(memories, self.top_k)
+        queries = _query_pool(self, dataset, user)
         i_add = 0
         i_q = 0
         # Infinite: the runner bounds consumption per session / over duration.
@@ -241,6 +312,8 @@ class ChatReplay:
         answer_time: float = 0.0,
         user_gap: float = 0.0,
         top_k: int = 20,
+        expand_context: int = 0,
+        filter: str = "",
     ) -> None:
         self.think = think
         self.search_every = max(1, int(search_every))
@@ -250,9 +323,13 @@ class ChatReplay:
             raise ValueError("user_gap must be >= 0")
         if top_k <= 0:
             raise ValueError("top_k must be > 0")
+        if expand_context < 0:
+            raise ValueError("expand_context must be >= 0")
         self.answer_time = answer_time
         self.user_gap = user_gap
         self.top_k = top_k
+        self.expand_context = expand_context
+        self.filter = filter
 
     def validate(self, dataset: DatasetAdapter) -> None:
         if not hasattr(dataset, "turn_stream"):
@@ -291,7 +368,12 @@ class ChatReplay:
                         turn_ops.append(
                             Op(
                                 type=OpType.SEARCH,
-                                query=QueryItem(query=first_content, top_k=self.top_k),
+                                query=QueryItem(
+                                    query=first_content,
+                                    top_k=self.top_k,
+                                    expand_context=self.expand_context,
+                                    filter=self.filter,
+                                ),
                                 delay=rng.uniform(0.0, self.think),
                             )
                         )

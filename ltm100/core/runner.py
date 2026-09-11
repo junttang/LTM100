@@ -57,7 +57,10 @@ class LoadRunner:
         self._start_time = 0.0
 
     async def run(self) -> list[OpResult]:
-        users = self.dataset.users(self.config.users, seed=self.config.seed)
+        users = self.shard_users(
+            self.dataset.users(self.config.users, seed=self.config.seed)
+        )
+        self.users = users
 
         # Let the scenario reject a misconfigured dataset loudly, before any
         # setup/provisioning or user runs. A plan-time raise would be swallowed
@@ -92,6 +95,15 @@ class LoadRunner:
             await self._closed_loop(users, deadline)
 
         return self.recorder.raw()
+
+    def shard_users(self, users: list[UserId]) -> list[UserId]:
+        """This process's slice of the virtual users.
+
+        Round-robin rather than contiguous blocks, so an ordered dataset does
+        not hand one shard all the large conversations."""
+        if self.config.procs == 1:
+            return users
+        return users[self.config.proc_index :: self.config.procs]
 
     async def _closed_loop(self, users: list[UserId], deadline: float) -> None:
         tasks = []

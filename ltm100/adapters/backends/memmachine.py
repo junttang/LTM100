@@ -43,10 +43,11 @@ class MemMachineClient:
         org_prefix: str = "ltm100",
         timeout: float = 60.0,
         add_batch_size: int = 50,
+        retries: int = 0,
     ) -> None:
         self.org_prefix = org_prefix
         self.add_batch_size = add_batch_size
-        self._transport = RestTransport(base_url, timeout=timeout)
+        self._transport = RestTransport(base_url, timeout=timeout, retries=retries)
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -109,13 +110,19 @@ class MemMachineClient:
 
     async def search(self, user: UserId, query: QueryItem) -> list[ResultItem]:
         org_id, project_id = self._tenant(user)
-        payload = {
+        payload: dict[str, Any] = {
             "org_id": org_id,
             "project_id": project_id,
             "query": query.query,
             "top_k": query.top_k,
             "types": _EPISODIC_TYPES,
         }
+        # Omitted rather than sent as 0/"" so a default run's payload is
+        # unchanged and the server applies its own defaults.
+        if query.expand_context:
+            payload["expand_context"] = query.expand_context
+        if query.filter:
+            payload["filter"] = query.filter
         resp = await self._transport.request("POST", "/api/v2/memories/search", json=payload)
         return _parse_episodes(resp)
 
