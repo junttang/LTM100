@@ -3,7 +3,7 @@
 > Status: **Implemented (baseline verified against a live MemMachine
 > server).** This document is the design reference; the README is the fast
 > entry point and `docs/` holds the per-topic detail.
-> Last updated: 2026-08-25
+> Last updated: 2026-09-11
 
 ## 1. Purpose
 
@@ -92,7 +92,9 @@ Three pluggable axes, plus a load core and a metrics recorder:
 - **Transport**: the wire protocol under a backend adapter (REST first, MCP
   later). Backend adapters delegate to a transport.
 - **Load Core**: orchestrates N virtual users (asyncio tasks), drives them
-  through a Scenario, and records metrics.
+  through a Scenario, and records metrics. By default a single process; can
+  shard the users across several OS processes (`--procs`) so a fast server is
+  not bottlenecked on one event-loop core.
 - **Scenario**: defines *how* a user emits requests (inter-arrival, op mix,
   termination). Closed and open models share one runner.
 - **MetricsRecorder**: collects per-request timing by op type; emits a
@@ -160,7 +162,9 @@ class LTMClient(Protocol):
 
         The search depth (`top_k`) is carried on `query.top_k` (default 20,
         set via the scenario `top_k` param / `--top-k`), not as a separate
-        argument."""
+        argument. Server-side search knobs (`expand_context`, `filter`) are
+        likewise carried on the `QueryItem` (default inert — the adapter omits
+        them from the wire payload when unset); see §7.2."""
 
     async def teardown(self, users: list[UserId], *, delete: bool) -> None:
         """Optional cleanup (delete per-user state) per run."""
@@ -170,6 +174,14 @@ class LTMClient(Protocol):
   backend's tenant key (MemMachine: `org_id`/`project_id` → `session_key`).
 - The adapter is async; sync SDKs (e.g. Mem0) are wrapped via an executor.
 - `setup`/`teardown` are out-of-measurement phases.
+- A backend may expose a `health()` probe so the run report records the
+  server's own version (`meta.build`) — a throughput number is not
+  reproducible without the build that produced it. Backends without it are
+  simply left blank.
+- An adapter that cannot honour a server-side search knob it was asked for
+  (e.g. the MCP transport has neither `expand_context` nor `filter`) must
+  **raise** rather than silently run a baseline search under the label of a
+  filtered/expanded one — otherwise the error rate would lie.
 
 ### 4.3 Transport (under a backend adapter)
 
@@ -179,8 +191,16 @@ class Transport(Protocol):
 ```
 
 - REST is the first transport. MCP is a second transport with the **same**
-  `LTMClient` contract; choosing it is a config switch, not a code fork.
+  `LTMClient` contract; choosing it is a config switch, not a code fork. The
+  MCP adapter imports lazily so a plain `pip install -e .` (without the
+  `[mcp]` extra) can still print `--help`; the extra is required only when an
+  MCP backend is actually selected.
 - Backends that have only an SDK (no server) implement `LTMClient` directly.
+- **Retries** live at the transport: only *connection-level* failures
+  (timeout, connection error) are retried (with exponential backoff,
+  `retries`, default 0). An HTTP error status is a real answer from the
+  server and is **never** retried — retrying it would understate the error
+  rate, which is a metric.
 
 ## 5. Load Model
 
@@ -211,9 +231,32 @@ Both models reduce to "a virtual user coroutine emits requests over time";
 the difference is the *emit schedule* (closed: think-time loop; open:
 inter-arrival). The runner is the same; the Scenario provides the schedule.
 
+### 5.4 Multi-process load generation (`--procs`)
+
+One asyncio event loop saturates a single CPU core well before a healthy
+server does, so past a few dozen users a single-process run reports the
+**generator's** ceiling rather than the target's. `--procs N` runs the same
+`LoadRunner` in N OS processes, each driving a disjoint slice of the virtual
+users, and pools their raw `OpResult`s.
+
+- Shards are **spawned** (not forked): a forked child inherits the parent's
+  event loop and open sockets, which asyncio does not support.
+- Users are partitioned round-robin (`runner.shard_users`), so an ordered
+  dataset does not hand one shard all the large conversations.
+- Whole-run budgets are divided across shards so an undivided value is not
+  applied N times over: `--ops`, `--global-concurrency`, `--queue-bound`,
+  and `--arrival-rate` are split (the rate is divided, not the count);
+  `--session-ops` is per-session and `--users` is partitioned by `shard_users`,
+  so neither is divided.
+- Raw results are pooled (not per-shard summaries) so percentiles are
+  computed over the whole population by the same `aggregate` used for a
+  single-process run — no approximation from per-shard percentiles.
+- `--procs 1` is the original single-process topology and is exactly the
+  same code path.
+
 See [`docs/load-models.md`](./docs/load-models.md) for the implemented
 mechanics (closed loop, Poisson arrivals, the bounded-queue rejection
-policy) and when to use each model.
+policy, multi-process sharding) and when to use each model.
 
 ## 6. Scenarios
 
@@ -257,8 +300,8 @@ All metrics are **client-observable** and **separated by op type**
 (`add` vs `search`).
 
 Per-request recorded fields: `op_type`, `user_id`, `started_at`, `ended_at`,
-`latency_ms`, `status` (ok / error / rejected), `error_kind`, `bytes_in/out`
-(optional).
+`latency_ms`, `status` (ok / error / rejected), `error_kind`, `n_items` (items
+stored on add / results returned on search).
 
 Aggregated summary:
 - Total count across op types and wall-clock seconds.
@@ -266,15 +309,29 @@ Aggregated summary:
   view reports throughput only; mixing add/search latencies into one latency
   distribution is ambiguous, so overall latency percentiles are not computed).
 - Per op type: count, throughput (ops/s), QPS, latency (mean, p50, p90, p95,
-  p99, max), and error rate.
+  p99, max), error rate, and **items** (`mean` results per op, `empty` count,
+  `empty_rate`). `empty_rate` matters for search: a run where every query
+  returns zero results still has a 0% error rate, so `empty_rate` is the only
+  field that distinguishes a working search from a silent one.
 - Error rate overall and by kind.
 - Concurrency (observed concurrent in-flight over time, for open model).
+
+### 7.2 Report metadata (`meta`)
+
+The summary JSON carries run metadata: `dataset`, `backend`, `scenario`,
+`users`, `seed`, `duration`, `ops`, `global_concurrency`, `procs`,
+`started_at`, and a **server build** probe. Before the run, the harness
+asks the backend's `health()` for the server's version (`meta.build`) — the
+one thing the harness cannot infer, and the cause of silent mismatches when
+two runs from two server builds are compared. A failed probe does not cost
+the run (the field reports `<unavailable: ...>`); a backend without
+`health()` is simply left blank.
 
 Recording:
 - **Default**: in-memory per-request list, aggregated post-run. Good for
   small/medium scale and full reproducibility/debugging.
 - **Optional**: NDJSON streaming (large scale), enabled via flag.
-- p99 computed post-run (sort / numpy).
+- Percentiles computed post-run by the nearest-rank method (no numpy).
 
 Server-side resource metrics are **not** collected here; the server exports
 its own (e.g. Prometheus) and is scraped separately.
@@ -306,8 +363,16 @@ dataset adapter, LTM client adapter, defaults.
 `--ops`, `--seed`, `--model`, `--global-concurrency`, `--warmup`, `--rampup`,
 `--preingest`, `--preingest-fraction`, `--arrival-rate`, `--session-ops`,
 `--queue-bound`, `--search-weight`, `--top-k`, `--think`, `--search-every`,
-`--answer-time`, `--user-gap`, `--raw`, `--no-delete-on-exit`, `--output`.
-See `ltm100 run --help` for the authoritative list.
+`--answer-time`, `--user-gap`, `--expand`, `--filter`, `--procs`, `--raw`,
+`--no-delete-on-exit`, `--output`. The MCP import is lazy, so `--help` works
+without the `[mcp]` extra. See `ltm100 run --help` for the authoritative list.
+
+Connection retries and the streaming JSON loader are backend/dataset
+options (set in the YAML, not on the CLI): the MemMachine backend takes a
+`retries` option (default 0; connection-level failures only); the
+LongMemEval adapter reads large local files with `ijson` (a runtime
+dependency) so only `dataset.length` samples are materialized instead of the
+whole document.
 
 ## 10. Reproducibility
 
@@ -316,20 +381,23 @@ See `ltm100 run --help` for the authoritative list.
 - Different seeds produce variance runs; same seed + same config reproduces.
 - Wall-clock timing is inherently non-deterministic (network/server); the
   *load shape* (order, mix, arrival) is deterministic under a seed.
+- With `--procs N`, the per-user seed is derived from the run seed and the
+  user id (not the shard index), so the same run shape reproduces regardless
+  of how many processes shard it.
 
 ## 11. Project Layout (proposed)
 
 ```
 ltm100/
   ltm100/
-    core/            # load core, runner, scenarios
+    core/            # load core, runner, scenarios, multiproc
     adapters/
-      datasets/      # longmemeval.py, ...
-      backends/       # memmachine.py, mem0.py, ...
-      transports/     # rest.py, mcp.py
+      datasets/      # longmemeval.py (ijson streaming), synthetic.py, ...
+      backends/       # memmachine.py, memmachine_mcp.py, mem0.py, ...
+      transports/     # rest.py (retry loop), mcp.py
     metrics/         # recorder, aggregation, report
-    config.py
-    cli.py
+    config.py        # lazy MCP import
+    cli.py           # sharding, health/build probe, report
   datasets/          # adapter-specific data access (not raw data)
   examples/          # sample configs + run commands
   docs/
@@ -341,25 +409,36 @@ ltm100/
 ## 12. Initial Baseline (implemented)
 
 First concrete adapters, end-to-end, **implemented and verified against a live
-MemMachine server (v0.3.10)** via a smoke run:
+MemMachine server** via a smoke run:
 - Dataset: **LongMemEval** (`xiaowu0162/longmemeval-cleaned`, `longmemeval_s_cleaned`),
   loadable from HuggingFace **or** from a pre-downloaded local JSON file
-  (`path` option). A **Synthetic** adapter (`synthetic`) is also provided for
-  fast, dependency-free load testing.
+  (`path` option, streamed with `ijson` so only `length` samples are
+  materialized instead of the whole multi-GB document). A **Synthetic**
+  adapter (`synthetic`) is also provided for fast, dependency-free load
+  testing, with an optional `categories` option that writes
+  `metadata.category` for `--filter` to select on.
 - Backend: **MemMachine** over **REST** (`/api/v2`), with
   `UserId → {org_id, project_id}` → `session_key = f"{org_id}/{project_id}"`,
-  and a second transport over **MCP** (same `LTMClient` contract).
+  and a second transport over **MCP** (same `LTMClient` contract). The REST
+  transport retries connection-level failures only (`retries` option, default
+  0). Both adapters support the server-side search knobs `expand_context` and
+  `filter` over REST; the MCP adapter **refuses** them (its `search_memory`
+  tool exposes neither) rather than silently ignoring them.
 - Scenarios: `chat-replay` (primary), `add-load`, `search-load`, `mixed` —
   all run under both closed and open models; all plans wrap their streams.
   (`add-search-mixed` was retired early on — its `search_every` cadence
   moved to `chat-replay`.) Scenario params: `--think`, `--search-every`,
-  `--search-weight`, `--top-k`, `--answer-time`, `--user-gap`.
-- CLI: `ltm100 run`, `ltm100 cleanup`; reports: `summary.json`, `summary.csv`,
-  optional `raw.ndjson`.
+  `--search-weight`, `--top-k`, `--answer-time`, `--user-gap`, `--expand`,
+  `--filter`.
+- CLI: `ltm100 run`, `ltm100 cleanup`; `--procs N` shards the run across
+  processes; reports: `summary.json` (incl. `meta.build` from the server
+  health probe), `summary.csv`, optional `raw.ndjson`.
 
 Verified: health, add/search, per-user isolation, count- and time-based
 termination, global concurrency cap, reproducibility (same seed), report
-generation, and cleanup (teardown delete). No code bugs found.
+generation (incl. overall QPS, per-op `items.empty_rate`, `meta.build`),
+multi-process sharding (`--procs`), streaming dataset load, retries, and
+cleanup (teardown delete). No code bugs found.
 
 ### Known limitation: backend `types` is hardcoded
 
@@ -399,7 +478,15 @@ Resolved during implementation:
   project-management tools (hybrid lifecycle). Tenancy is passed as MCP tool
   arguments. The MCP `add_memory` writes all memory types (episodic + semantic),
   unlike the episodic-only REST add, so MCP add latency is not directly
-  comparable to REST add latency; documented rather than worked around.
+  comparable to REST add latency; documented rather than worked around. The
+  MCP adapter imports lazily (`config._mcp_backend`) so a plain install
+  without the `[mcp]` extra can still print `--help`; the extra is required
+  only when an MCP backend is selected. The MCP `add_memory` tool has no
+  metadata field, so the adapter **refuses** items carrying metadata (a
+  metadata `--filter` would otherwise select nothing for invisible
+  reasons); and `search_memory` exposes neither `expand_context` nor
+  `filter`, so the adapter **refuses** those knobs rather than silently
+  running a baseline search under their label.
 - **chat-replay LLM timing**: `chat-replay` models the LLM answer time
   (`answer_time`) and the user's think/typing time (`user_gap`) as
   Exponential-mean delays attached to specific ops, defaulting to 0

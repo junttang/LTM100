@@ -3,8 +3,9 @@
 LTM100 separates the **scenario** (what ops to emit and on what data) from
 the **load model** (when and how many users emit them). The same scenario
 plan runs under either load model — only the consume schedule changes. This
-document explains the two models, the congestion policy, and when to use
-each. For per-scenario data flow, see [`scenarios.md`](./scenarios.md).
+document explains the two models, the congestion policy, multi-process
+load generation, and when to use each. For per-scenario data flow, see
+[`scenarios.md`](./scenarios.md).
 
 ## The two axes
 
@@ -106,3 +107,36 @@ Both consume the *same* `plan()` — recall order, add content, and
 - **Most realistic chatbot load** — `chat-replay --model open`: customers
   arrive per a Poisson process, each session recalls then answers/ingests a
   slice of the conversation, under the congestion policy.
+
+## Multi-process load generation (`--procs`)
+
+One asyncio event loop saturates a single CPU core. If the server answers
+fast enough, the client becomes the slower side and the run starts
+describing the generator rather than the target. `--procs N` fixes that by
+running the same `LoadRunner` in N OS processes, each driving a disjoint
+slice of the virtual users.
+
+- **Sharding.** Users are partitioned round-robin across the shards, so an
+  ordered dataset does not hand one shard all the large conversations. Each
+  shard builds its own runner, so whole-run budgets are divided across them:
+  `--ops`, `--global-concurrency`, `--queue-bound` are split as integers
+  (the remainder goes to the lowest-numbered shards, so shares sum exactly),
+  and `--arrival-rate` is divided by N (the combined rate is preserved).
+  `--session-ops` is per-session and `--users` is partitioned by the shard,
+  so neither is divided.
+- **Pooling.** Shards return their raw `OpResult`s, not summaries; the
+  parent pools them and runs the same `aggregate` used for a single-process
+  run, so percentiles are computed over the whole population — no
+  approximation from per-shard percentiles.
+- **Spawned, not forked.** Workers are spawned (a forked child inherits the
+  parent's event loop and open sockets, which asyncio does not support).
+- **Reproducible.** The per-user seed is derived from the run seed and the
+  user id, not the shard index, so the same run shape reproduces regardless
+  of `--procs`.
+- `--procs 1` is the original single-process topology, exactly the same
+  code path.
+
+Use `--procs` when the server is fast and you suspect the client is the
+bottleneck (a single-process run whose throughput stops climbing as you add
+users is the tell). The two load models above are unchanged by sharding — a
+shard simply drives fewer users.

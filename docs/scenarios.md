@@ -19,9 +19,11 @@ per-scenario differences small.
 
 ### Users and tenancy
 
-A virtual user is **one asyncio coroutine** in a single process (not a
-container or process). `--users N` spawns N coroutines, each identified by a
-`UserId` string.
+A virtual user is **one asyncio coroutine** in a process (not a container).
+`--users N` spawns N coroutines, each identified by a `UserId` string. By
+default all coroutines run in a single process; `--procs N` shards them across
+N OS processes (each driving a disjoint slice of the users) so a fast server
+is not bottlenecked on one event-loop core.
 
 Per-user isolation is the **adapter's** responsibility: it maps a `UserId`
 to whatever tenant key the backend uses, so that a user only ever searches
@@ -56,11 +58,19 @@ A scenario emits `Op`s of two kinds, carried over the `LTMClient` contract:
   ids returned as `n_items`.
 - **SEARCH** — `client.search(user, query: QueryItem) -> list[ResultItem]`.
   Retrieves memories scoped to this user only. The `QueryItem` carries a
-  `query` string and a `top_k` (default 20, set via `--top-k`). One `search` op records the
-  number of results returned as `n_items`.
+  `query` string, a `top_k` (default 20, set via `--top-k`), and two optional
+  server-side knobs: `expand_context` (`--expand`, neighbouring episodes around
+  each hit) and `filter` (`--filter`, a metadata filter expression such as
+  `metadata.category=cat_3`). Both default to inert — the adapter omits them
+  from the wire payload when unset, so a default run's request is unchanged.
+  One `search` op records the number of results returned as `n_items`.
 
 Per-request recording: `op_type`, `user_id`, `started_at`, `ended_at`,
-`status` (ok / error / rejected), `error_kind`, `n_items`.
+`status` (ok / error / rejected), `error_kind`, `n_items`. The aggregate
+also reports per op `items.empty_rate` — the fraction of *successful* ops
+that moved nothing — which for search is the only way to tell a run where
+every query returned zero results from a healthy one (both have a 0% error
+rate).
 
 ### What data add and search operate on
 
@@ -81,8 +91,11 @@ stored unit. The adapter owns the content; the backend adapter forwards
   stream is its sample's entire haystack (typically tens to hundreds of
   chunks).
 - **Synthetic** — `memories_per_user` (default 100) deterministic items of
-  `content_chars` (default 200) each, generated from the seed. Reproducible
-  and download-free.
+  `content_chars` (default 200) each, generated from the seed. An optional
+  `categories` option writes `metadata.category` (`cat_<i mod N>`) so a
+  single-value `--filter` selects about `1/N` of the data; with it unset the
+  corpus is byte-identical to one built without it. Reproducible and
+  download-free.
 
 Every `MemoryItem` is sent as an **episodic** memory (`types: ["episodic"]`,
 currently hardcoded; semantic is a future option). In practice each `add` op
@@ -92,7 +105,8 @@ carries one item and becomes one request.
 taken from a dataset evaluation question. `search-load` and `mixed`
 build the query pool from the user's own `memory_stream` items (one
 `QueryItem` per stored unit, `query` = the item's content, `top_k` from
-`--top-k`, default 20). The
+`--top-k`, default 20, plus the optional `expand_context`/`filter` from
+`--expand`/`--filter`). The
 pool is therefore as large as the memory stream, so cycling it does not
 naively repeat a single query — important because a tiny, fixed query pool
 would warm a server's result cache and understate search latency. The pool
@@ -189,7 +203,8 @@ interleaves them.
 think)` (default 0.05). Both user and assistant turns are added identically
 (episodic, `producer` = user id).
 **search:** one per recall-firing user turn, `query` = that turn's first
-chunk's content, `top_k` from `--top-k` (default 20), `delay = uniform(0, think)`.
+chunk's content, `top_k` from `--top-k` (default 20), plus the optional
+`expand_context`/`filter` from `--expand`/`--filter`, `delay = uniform(0, think)`.
 The query pool is **not** used — queries come from the turn stream.
 
 **Parameters:** `--think` (default 0.05), `--search-every N` (default 1 =
@@ -281,7 +296,8 @@ measured run, so **memory must already be present** (use `--preingest`).
 (`delay = uniform(0, 0.02)`) so users drift out of lockstep. The query pool
 is the user's own memory contents, cycled with a rotating per-pass start
 offset so passes are not identical. `top_k` comes from the `QueryItem`
-(set via `--top-k`, default 20).
+(set via `--top-k`, default 20); `expand_context`/`filter` come from
+`--expand`/`--filter` when set.
 
 **add:** none during measurement.
 
@@ -344,7 +360,9 @@ count.
 
 **add:** when not a search, one item per op, `delay = uniform(0, think)`.
 **search:** query from the content-derived pool (the user's own memory
-contents), cycled, `top_k` from `--top-k` (default 20), `delay = uniform(0, think)`.
+contents), cycled, `top_k` from `--top-k` (default 20), plus
+`expand_context`/`filter` from `--expand`/`--filter` when set,
+`delay = uniform(0, think)`.
 
 **Parameters:** `--search-weight` (default 0.8, forwarded to the scenario
 constructor), `--think` (default 0.05). The open-model knobs `--arrival-rate`,
@@ -416,10 +434,19 @@ org_id, project_id
 query: <string>
 top_k: 20                      # from the QueryItem (--top-k, default 20)
 types: ["episodic"]
+expand_context?: <int>          # only when --expand is set (else omitted)
+filter?: <expr>                # only when --filter is set (else omitted)
 ```
 
-The response's `content.episodic_memory.long_term_memory.episodes` is parsed
+`expand_context` and `filter` are omitted from the payload when unset, so a
+default run's request is byte-identical to one built without them. The
+response's `content.episodic_memory.long_term_memory.episodes` is parsed
 into `ResultItem`s (`content`, `score`, `uid`, `metadata`).
+
+**Retries.** The REST transport retries only *connection-level* failures
+(timeout, connection error) up to the backend's `retries` option (default 0),
+with exponential backoff. An HTTP error status is a real answer from the
+server and is never retried — retrying it would understate the error rate.
 
 **Endpoints used:**
 
@@ -428,7 +455,7 @@ POST /api/v2/projects          create a per-user project (setup)
 POST /api/v2/projects/delete   delete a project (teardown)
 POST /api/v2/memories          add memories
 POST /api/v2/memories/search   search memories
-GET  /api/v2/health            readiness check
+GET  /api/v2/health            readiness check + build/version probe (meta.build)
 ```
 
 > Note: MemMachine's `projects/list` is eventually consistent — an immediate
@@ -462,3 +489,10 @@ comparing the two transports:
 - `search_memory` returns a `SearchResult` with the same
   `content.episodic_memory.long_term_memory.episodes` shape the REST search
   endpoint uses, so results parse identically.
+
+**Knobs the MCP tools cannot honour.** `add_memory` has no metadata field,
+and `search_memory` exposes neither `expand_context` nor `filter`. Rather
+than silently dropping metadata or running a baseline search under the label
+of a filtered/expanded one (which would make the error rate lie), the MCP
+adapter **raises** for `--expand`/`--filter` and for items carrying metadata
+— use the REST backend for those arms.

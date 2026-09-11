@@ -24,12 +24,22 @@ Implemented:
   `mixed`. All wrap their data streams to sustain load and search on
   content-derived queries.
 - Congestion policy (bounded queue with rejection) for the open model.
+- Multi-process load generation (`--procs N`), so a fast server is not
+  bottlenecked on one event-loop core.
 - Warm-up / pre-ingest before the measured run.
-- Datasets: LongMemEval (local file or HuggingFace), synthetic.
-- Backend: MemMachine (REST and MCP transports).
+- Datasets: LongMemEval (local file or HuggingFace; large local files are
+  streamed with `ijson`), synthetic (with optional `categories` for
+  `--filter`).
+- Backend: MemMachine (REST and MCP transports); REST retries
+  connection-level failures only (`retries` option).
+- Server-side search knobs: `--expand` (expand_context) and `--filter`
+  (metadata filter), forwarded to every search; the MCP backend refuses
+  them loudly rather than ignoring them.
 - Configurable scenario parameters on the CLI (`--think`, `--search-every`,
-  `--search-weight`, `--top-k`, `--answer-time`, `--user-gap`).
-- Reports: summary JSON/CSV + optional raw NDJSON.
+  `--search-weight`, `--top-k`, `--answer-time`, `--user-gap`, `--expand`,
+  `--filter`).
+- Reports: summary JSON/CSV + optional raw NDJSON, with per-op
+  `items.empty_rate` and the server build recorded in `meta.build`.
 
 Planned (see [DESIGN.md](./DESIGN.md) for the full roadmap):
 - Mem0 backend adapter; per-user in-flight > 1; per-user-group finer control;
@@ -153,6 +163,32 @@ ltm100 run --config examples/memmachine-mcp.yaml \
     --output out/mcp-chat
 ```
 
+### Server-side search knobs (`--expand`, `--filter`; REST only)
+
+Forward `expand_context` and a metadata filter to every search so a run can
+match another harness's search behaviour. The filter needs the corpus to
+carry the field — the synthetic dataset writes `metadata.category` when its
+`categories` option is set (uncomment it in the config):
+
+```sh
+ltm100 run --config examples/synthetic.yaml \
+    --scenario search-load --users 20 --duration 30 --seed 0 \
+    --preingest --expand 2 --filter metadata.category=cat_3 \
+    --output out/filtered-search
+```
+
+### Scaling the client (`--procs`)
+
+One asyncio process saturates a single core; a fast server can leave the
+client as the bottleneck. Shard the users across N OS processes — the whole
+run's budgets are divided across the shards:
+
+```sh
+ltm100 run --config examples/memmachine.yaml \
+    --scenario chat-replay --users 100 --duration 60 --seed 0 \
+    --procs 4 --output out/scaled
+```
+
 ### Common flags
 
 - `--duration SECONDS` or `--ops N`: how a run terminates (one is required).
@@ -161,6 +197,17 @@ ltm100 run --config examples/memmachine-mcp.yaml \
 - `--model closed|open`: load model (see [Load models](docs/load-models.md)).
 - `--global-concurrency N`: cap total in-flight ops (0 = no cap).
 - `--arrival-rate F` / `--session-ops N` / `--queue-bound N`: open-model knobs.
+- `--procs N`: shard virtual users across N OS processes (default 1). One
+  asyncio process saturates a single core before a fast server does; raise
+  this when the client, not the server, is the bottleneck. Whole-run budgets
+  (ops, global-concurrency, arrival-rate, queue-bound) are divided across
+  shards; `--procs 1` is the original single-process topology.
+- `--expand N`: (search-load, mixed, chat-replay) server-side `expand_context`
+  — neighbouring episodes returned around each hit (default 0 = off, omitted
+  from the request). REST only.
+- `--filter EXPR`: (search-load, mixed, chat-replay) server-side metadata
+  filter, e.g. `metadata.category=cat_3`. Needs the corpus to carry that
+  field (synthetic's `categories` option writes it). REST only.
 - `--rampup SECONDS`: stagger user start to avoid a thundering herd.
 - `--search-weight F`: (mixed) fraction of ops that are search (0..1).
 - `--top-k N`: (search-load, mixed, chat-replay) memories returned per search
@@ -191,7 +238,10 @@ usable over **REST** or **MCP**:
   `add_memory` / `search_memory` MCP tools. Lifecycle stays on REST (MCP has
   no project-management tools). Note `add_memory` writes all memory types
   (episodic + semantic), unlike the episodic-only REST add, so MCP add
-  latency is not directly comparable to REST add latency.
+  latency is not directly comparable to REST add latency. The MCP tools
+  expose neither `expand_context`/`filter` nor item metadata, so the MCP
+  backend **refuses** `--expand`/`--filter` and metadata-bearing items
+  loudly — use the REST backend for those arms.
 
 Verify the server is up before a run (MemMachine: `GET /api/v2/health`).
 Additional backends (e.g. Mem0) and how to add a new one are described in
@@ -202,8 +252,11 @@ Additional backends (e.g. Mem0) and how to add a new one are described in
 With `--output DIR`, LTM100 writes:
 
 - `summary.json` — aggregated metrics: an overall total throughput/QPS at the
-  top level, plus count, throughput, QPS, latency percentiles p50/p90/p95/p99/max,
-  and error rate per op type, plus run meta.
+  top level, plus per op type count, throughput, QPS, latency percentiles
+  p50/p90/p95/p99/max, error rate, and `items.empty_rate` (fraction of
+  searches that returned nothing — a 0% error rate alone cannot tell a
+  working search from a silent one). `meta` records the run config plus the
+  server's own build (`meta.build`, probed from `/api/v2/health`).
 - `summary.csv` — the same summary as a flat table, with an overall `all` row
   (throughput/qps only; latency cells blank since mixing add/search latencies is
   ambiguous).
