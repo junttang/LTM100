@@ -1,6 +1,6 @@
 # LTM100
 
-LTM100 is a multi-user **load benchmark** for Long-Term Memory (LTM) systems
+LTM100 is an end-to-end multi-user **load benchmark** for Long-Term Memory (LTM) systems
 (e.g. MemMachine, Mem0). It drives many virtual users performing `add`,
 `search`, and `add&search` operations against a single LTM endpoint and
 reports client-observable performance metrics: throughput, QPS, latency
@@ -13,7 +13,7 @@ the server itself.
 
 ## Status
 
-Version: **v0.4.0** (see [Versioning](#versioning)).
+Version: **v0.4.1** (see [Versioning](#versioning)).
 
 Early development. Datasets and LTM backends are pluggable; the initial
 baseline is the LongMemEval dataset + the MemMachine backend over REST.
@@ -302,11 +302,11 @@ pytest -q
 ## Versioning
 
 Releases are marked with git tags (`vMAJOR.MINOR.PATCH`). The current release
-is **v0.4.0**. Tag a release at a stable, documented milestone:
+is **v0.4.1**. Tag a release at a stable, documented milestone:
 
 ```sh
-git tag v0.4.0
-git push origin v0.4.0
+git tag v0.4.1
+git push origin v0.4.1
 ```
 
 During 0.x, each minor bump marks a meaningful, tested milestone (a coherent
