@@ -410,12 +410,14 @@ ltm100/
 
 First concrete adapters, end-to-end, **implemented and verified against a live
 MemMachine server** via a smoke run:
-- Dataset: **LongMemEval** (`xiaowu0162/longmemeval-cleaned`, `longmemeval_s_cleaned`),
-  loadable from HuggingFace **or** from a pre-downloaded local JSON file
-  (`path` option, streamed with `ijson` so only `length` samples are
-  materialized instead of the whole multi-GB document). A **Synthetic**
-  adapter (`synthetic`) is also provided for fast, dependency-free load
-  testing, with an optional `categories` option that writes
+- Dataset: **LongMemEval** (`xiaowu0162/longmemeval-cleaned`, `longmemeval_s_cleaned`;
+  https://github.com/xiaowu0162/longmemeval, MIT), loaded at runtime from
+  HuggingFace **or** a pre-downloaded local JSON file (`path` option, streamed
+  with `ijson` so only `length` samples are materialized instead of the whole
+  multi-GB document; the data is not redistributed with LTM100 — see the
+  adapter docstring for the citation). A **Synthetic** adapter (`synthetic`) is
+  also provided for fast, dependency-free load testing, with an optional
+  `categories` option that writes
   `metadata.category` for `--filter` to select on.
 - Backend: **MemMachine** over **REST** (`/api/v2`), with
   `UserId → {org_id, project_id}` → `session_key = f"{org_id}/{project_id}"`,

@@ -247,6 +247,11 @@ Verify the server is up before a run (MemMachine: `GET /api/v2/health`).
 Additional backends (e.g. Mem0) and how to add a new one are described in
 [`DESIGN.md`](./DESIGN.md).
 
+## Datasets
+
+The baseline dialogue dataset is [LongMemEval](https://github.com/xiaowu0162/longmemeval).
+A **Synthetic** dataset is bundled for load testing.
+
 ## Reports
 
 With `--output DIR`, LTM100 writes:

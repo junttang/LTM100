@@ -19,6 +19,17 @@ own sample count.
 Dataset loading mirrors evaluation/retrieval_agent/longmemeval_test.py: prefer
 the `datasets` loader, fall back to a direct JSON download via
 huggingface_hub when the loader hits schema incompatibilities.
+
+Data and attribution
+--------------------
+LongMemEval data is (c) its authors and licensed under the MIT license
+(https://github.com/xiaowu0162/longmemeval). This adapter loads the data at
+runtime from HuggingFace or from a user-supplied local path; the data is **not**
+redistributed with LTM100. If you publish results obtained with this workload,
+please cite the dataset:
+
+    Wu et al., "LongMemEval: Benchmarking Chat Assistants on Long-Term
+    Interactive Memory," arXiv:2410.10813, 2024.
 """
 
 from __future__ import annotations
