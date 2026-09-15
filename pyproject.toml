@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ltm100"
-version = "0.1.0"
+version = "0.4.0"
 description = "Multi-user load benchmark for Long-Term Memory (LTM) systems."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "Junhyuok Park", email = "junhyeok0.park@sk.com" }]
+authors = [{ name = "Junhyeok Park", email = "junhyeok0.park@sk.com" }]
 dependencies = [
     "aiohttp>=3.9",
     "pyyaml>=6.0",
