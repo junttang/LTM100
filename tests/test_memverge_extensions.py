@@ -103,7 +103,7 @@ class _Bundle:
 
 
 def _patch_backend(monkeypatch, factory):
-    import ltm100.cli as cli
+    from ltm100 import cli
     monkeypatch.setattr(cli, "build_backend", lambda cfg: factory())
 
 
@@ -187,6 +187,134 @@ def test_the_report_meta_carries_the_build(tmp_path, monkeypatch, capsys):
     meta = _json.loads(capsys.readouterr().out)["meta"]
     assert meta["build"] == "9.9.9+test"
     assert meta["service"] == "memmachine"
+
+
+def test_report_meta_uses_whole_run_values_and_real_timestamps(
+    tmp_path, monkeypatch, capsys
+):
+    """Shard budgets must not leak into the parent report metadata."""
+    import json as _json
+    from datetime import datetime, timezone
+
+    import yaml as _yaml
+
+    from ltm100 import cli
+
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text(
+        _yaml.safe_dump(
+            {
+                "dataset": {"name": "synthetic", "length": 6},
+                "backend": {
+                    "name": "memmachine",
+                    "base_url": "http://localhost:8080",
+                },
+            }
+        )
+    )
+    start = datetime(2026, 9, 20, 1, 2, 3, tzinfo=timezone.utc)
+    end = datetime(2026, 9, 20, 1, 2, 13, tzinfo=timezone.utc)
+    ticks = iter((start, end))
+
+    class _Clock:
+        @classmethod
+        def now(cls, tz):
+            assert tz is timezone.utc
+            return next(ticks)
+
+    monkeypatch.setattr(cli, "datetime", _Clock)
+    monkeypatch.setattr(cli, "_backend_build", lambda cfg: {})
+    monkeypatch.setattr(cli, "run_shards", lambda entry, args, procs: [])
+
+    args = cli.build_parser().parse_args(
+        [
+            "run",
+            "--config",
+            str(cfg_path),
+            "--scenario",
+            "mixed",
+            "--users",
+            "6",
+            "--duration",
+            "10",
+            "--procs",
+            "3",
+            "--global-concurrency",
+            "100",
+            "--model",
+            "open",
+            "--arrival-rate",
+            "40",
+            "--session-ops",
+            "12",
+            "--queue-bound",
+            "20",
+            "--preingest",
+            "--preingest-fraction",
+            "0.25",
+            "--search-weight",
+            "0.6",
+            "--top-k",
+            "7",
+        ]
+    )
+    assert cli._run(args) == 0
+
+    meta = _json.loads(capsys.readouterr().out)["meta"]
+    assert meta["global_concurrency"] == 100
+    assert meta["arrival_rate"] == 40.0
+    assert meta["queue_bound"] == 20
+    assert meta["session_ops"] == 12
+    assert meta["preingest_fraction"] == 0.25
+    assert meta["search_weight"] == 0.6
+    assert meta["top_k"] == 7
+    assert meta["started_at"] == start.isoformat()
+    assert meta["ended_at"] == end.isoformat()
+
+
+def test_report_meta_keeps_the_whole_count_based_ops_budget(
+    tmp_path, monkeypatch, capsys
+):
+    import json as _json
+
+    import yaml as _yaml
+
+    from ltm100 import cli
+
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text(
+        _yaml.safe_dump(
+            {
+                "dataset": {"name": "synthetic", "length": 6},
+                "backend": {
+                    "name": "memmachine",
+                    "base_url": "http://localhost:8080",
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(cli, "_backend_build", lambda cfg: {})
+    monkeypatch.setattr(cli, "run_shards", lambda entry, args, procs: [])
+
+    args = cli.build_parser().parse_args(
+        [
+            "run",
+            "--config",
+            str(cfg_path),
+            "--scenario",
+            "add-load",
+            "--users",
+            "6",
+            "--ops",
+            "1000",
+            "--procs",
+            "3",
+        ]
+    )
+    assert cli._run(args) == 0
+
+    meta = _json.loads(capsys.readouterr().out)["meta"]
+    assert meta["ops"] == 1000
 
 
 # -- whole-run load is divided across shards --------------------------------

@@ -147,6 +147,62 @@ def _backend_build(cfg) -> dict:
     }
 
 
+def _run_metadata(
+    args: argparse.Namespace,
+    *,
+    dataset: str,
+    backend: str,
+    build: dict,
+    started_at: datetime,
+    ended_at: datetime,
+) -> dict:
+    """Describe the whole run, never an individual process shard."""
+    meta = {
+        "dataset": dataset,
+        "backend": backend,
+        **build,
+        "scenario": args.scenario,
+        "users": args.users,
+        "seed": args.seed,
+        "duration": args.duration,
+        "ops": args.ops,
+        "global_concurrency": args.global_concurrency,
+        "warmup": args.warmup,
+        "rampup": args.rampup,
+        "preingest": args.preingest,
+        "preingest_fraction": args.preingest_fraction,
+        "model": args.model,
+        "procs": args.procs,
+        "delete_on_exit": not args.no_delete_on_exit,
+        "started_at": started_at.isoformat(),
+        "ended_at": ended_at.isoformat(),
+    }
+
+    if args.model == "open":
+        meta.update(
+            arrival_rate=args.arrival_rate,
+            session_ops=args.session_ops,
+            queue_bound=args.queue_bound,
+        )
+    if args.scenario in ("search-load", "mixed", "chat-replay"):
+        meta.update(
+            top_k=args.top_k,
+            expand_context=args.expand,
+            filter=args.filter,
+        )
+    if args.scenario == "mixed":
+        meta.update(search_weight=args.search_weight, think=args.think)
+    elif args.scenario == "chat-replay":
+        meta.update(
+            think=args.think,
+            search_every=args.search_every,
+            answer_time=args.answer_time,
+            user_gap=args.user_gap,
+        )
+
+    return meta
+
+
 def _run(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     run_cfg = _build_run_config(args)
@@ -178,22 +234,19 @@ def _run(args: argparse.Namespace) -> int:
     # Before the run: a server that dies under load still has to be identifiable.
     build = _backend_build(cfg)
 
+    started_at = datetime.now(timezone.utc)
     raw = run_shards(_shard_entry, vars(args), run_cfg.procs)
+    ended_at = datetime.now(timezone.utc)
     summary = aggregate(raw)
 
-    meta = {
-        "dataset": cfg.dataset.name,
-        "backend": cfg.backend.name,
-        **build,
-        "scenario": args.scenario,
-        "users": run_cfg.users,
-        "seed": run_cfg.seed,
-        "duration": run_cfg.duration,
-        "ops": run_cfg.ops,
-        "global_concurrency": run_cfg.global_concurrency,
-        "procs": run_cfg.procs,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-    }
+    meta = _run_metadata(
+        args,
+        dataset=cfg.dataset.name,
+        backend=cfg.backend.name,
+        build=build,
+        started_at=started_at,
+        ended_at=ended_at,
+    )
 
     print(json.dumps({"meta": meta, "summary": summary}, indent=2))
 

@@ -268,7 +268,9 @@ With `--output DIR`, LTM100 writes:
   p50/p90/p95/p99/max, error rate, and `items.empty_rate` (fraction of
   searches that returned nothing — a 0% error rate alone cannot tell a
   working search from a silent one). `meta` records the run config plus the
-  server's own build (`meta.build`, probed from `/api/v2/health`).
+  server's own build (`meta.build`, probed from `/api/v2/health`). For
+  multi-process runs these are the whole-run settings, not one shard's share;
+  `started_at` and `ended_at` bracket the complete run lifecycle.
 - `summary.csv` — the same summary as a flat table, with an overall `all` row
   (throughput/qps only; latency cells blank since mixing add/search latencies is
   ambiguous).

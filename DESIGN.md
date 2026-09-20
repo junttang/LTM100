@@ -320,9 +320,12 @@ Aggregated summary:
 
 ### 7.2 Report metadata (`meta`)
 
-The summary JSON carries run metadata: `dataset`, `backend`, `scenario`,
-`users`, `seed`, `duration`, `ops`, `global_concurrency`, `procs`,
-`started_at`, and a **server build** probe. Before the run, the harness
+The summary JSON carries whole-run metadata: `dataset`, `backend`, `scenario`,
+the load and scenario parameters, `procs`, `started_at`, `ended_at`, and a
+**server build** probe. Values such as `ops`, `global_concurrency`,
+`arrival_rate`, and `queue_bound` are the requested totals, not one process
+shard's share. `started_at` and `ended_at` bracket worker execution, including
+setup, optional pre-ingest, measurement, and teardown. Before the run, the harness
 asks the backend's `health()` for the server's version (`meta.build`) — the
 one thing the harness cannot infer, and the cause of silent mismatches when
 two runs from two server builds are compared. A failed probe does not cost
@@ -346,12 +349,13 @@ its own (e.g. Prometheus) and is scraped separately.
 4. **Optional warm-up / pre-ingest** — fill each user's memories (a fraction
    of `memory_stream`) before the measured run; excluded from metrics. Enabled
    with `--preingest` and `--preingest-fraction`; applied under the global
-   concurrency cap.
+   concurrency cap. A zero fraction is a no-op, and any ingestion failure
+   aborts the run before measurement.
 5. **Measured run** — scenario drives users; MetricsRecorder collects.
 6. **Drain** — in-flight requests complete (or timeout).
-7. **Aggregate & report** — summary JSON/CSV + optional raw NDJSON.
-8. **Teardown** (`LTMClient.teardown`, `delete=True`) — optional per run;
+7. **Teardown** (`LTMClient.teardown`, `delete=True`) — optional per run;
    also exposed as a standalone cleanup command.
+8. **Aggregate & report** — summary JSON/CSV + optional raw NDJSON.
 
 Termination: count-based (total K ops) **or** time-based (T seconds). Ramp-up
 is optional; warm-up time is excluded from steady-state metrics.
