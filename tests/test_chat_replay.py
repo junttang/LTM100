@@ -193,9 +193,9 @@ async def test_chat_replay_requires_turn_stream():
 
 @pytest.mark.asyncio
 async def test_chat_replay_answer_time_and_user_gap_add_idle():
-    """answer_time attaches a delay after a user turn's last add (LLM answer
-    time); user_gap attaches a delay before a user turn's first op (user
-    typing time), except the pass's first turn. With both set, the total
+    """answer_time delays the following assistant add (LLM answer time);
+    user_gap delays a user turn's first op (user typing time), except the
+    pass's first turn. With both set, the total
     per-pass delay budget grows by ~3*answer_time + 2*user_gap (3 user turns
     => 3 answer_times; user_gap skipped on the first turn => 2 user_gaps).
     Compared deterministically via the plan's Op delays (seeded, not via
@@ -219,11 +219,12 @@ async def test_chat_replay_answer_time_and_user_gap_add_idle():
 
 @pytest.mark.asyncio
 async def test_chat_replay_answer_time_gaps_after_user_turn_only():
-    """answer_time lands on a user turn's last add (the assistant answer
-    follows during that gap); user_gap before a user turn's first op but not
+    """answer_time lands on the following assistant turn's first add;
+    user_gap lands before a user turn's first op but not
     the pass's first turn. Assistant turns get neither. Inspect the raw Op
     delays from the plan (checks placement + that the delays are the Exponential
-    draws, aggregated to avoid single-draw flakiness)."""
+    draws, aggregated to avoid single-draw flakiness). User-turn adds carry
+    neither delay; following assistant adds carry `answer_time`."""
     import itertools
 
     ds = DialogueDataset()
@@ -242,24 +243,59 @@ async def test_chat_replay_answer_time_gaps_after_user_turn_only():
         "search", "add", "add", "search", "add", "add", "search", "add", "add"
     ]
 
-    # First user turn's first op (search) has no user_gap; assistant adds have
-    # neither gap. These three must be ~0 (think=0).
+    # First user turn's first op (search) has no user_gap. User-turn adds have
+    # neither answer_time nor user_gap, so these must be ~0 (think=0).
     assert ops[0].delay < 0.05  # u0 search: first turn, no user_gap
-    assert ops[2].delay < 0.05  # a1 add: assistant, no gap
-    assert ops[5].delay < 0.05  # a3 add: assistant, no gap
+    assert ops[1].delay < 0.05  # u0 add: user already arrived
+    assert ops[4].delay < 0.05  # u2 add: user already arrived
+    assert ops[7].delay < 0.05  # u4 add: user already arrived
 
-    # The answer_time draws (3 of them, mean 2.0 each) land on the user-turn
-    # adds: ops[1], ops[4], ops[7]. Their sum is ~6 in expectation; assert the
-    # aggregate is substantial (single Exponential draws vary, but their sum
-    # is robustly large).
-    answer_total = ops[1].delay + ops[4].delay + ops[7].delay
+    # The answer_time draws (3 of them, mean 2.0 each) land on the following
+    # assistant adds: ops[2], ops[5], ops[8].
+    answer_total = ops[2].delay + ops[5].delay + ops[8].delay
     assert answer_total > 2.0
     # The user_gap draws (2 of them, mean 3.0 each) land on the non-first user
     # turns' first ops: ops[3] (u2 search) and ops[6] (u4 search).
     user_gap_total = ops[3].delay + ops[6].delay
     assert user_gap_total > 2.0
-    # Sanity: the assistant adds (ops[2], ops[5], ops[8]) carry no gap.
-    assert ops[8].delay < 0.05  # a5 add: assistant, no gap
+
+
+@pytest.mark.asyncio
+async def test_chat_replay_runner_waits_before_the_assistant_add(monkeypatch):
+    """The runner applies Op.delay before execution, so answer_time must wait
+    after the user add and immediately before the assistant add."""
+
+    class OnePairDataset(DialogueDataset):
+        def turn_stream(self, user: UserId):
+            yield Turn(
+                role="user",
+                items=[MemoryItem(content=f"{user} user", producer=user)],
+            )
+            yield Turn(
+                role="assistant",
+                items=[MemoryItem(content=f"{user} assistant", producer=user)],
+            )
+
+    backend = RecordingBackend()
+    waits: list[tuple[int, float]] = []
+
+    async def record_sleep(delay: float) -> None:
+        waits.append((len(backend.ops), delay))
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+    runner = LoadRunner(
+        client=backend,
+        dataset=OnePairDataset(),
+        scenario=ChatReplay(think=0.0, answer_time=1.0),
+        config=RunConfig(users=1, ops=3, seed=0),
+    )
+    await runner.run()
+
+    assert [op for _, op in backend.ops] == ["search", "add", "add"]
+    assert len(waits) == 1
+    completed_ops, delay = waits[0]
+    assert completed_ops == 2
+    assert delay > 0
 
 
 @pytest.mark.asyncio
