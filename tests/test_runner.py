@@ -249,6 +249,40 @@ async def test_preingest_fraction_limits_items():
 
 
 @pytest.mark.asyncio
+async def test_preingest_fraction_zero_adds_nothing():
+    ds = FakeDataset(n_memories=20)
+    backend = FakeBackend()
+    cfg = RunConfig(
+        users=1,
+        ops=2,
+        seed=0,
+        preingest=True,
+        preingest_fraction=0.0,
+    )
+    runner = LoadRunner(client=backend, dataset=ds, scenario=SearchLoad(), config=cfg)
+    results = await runner.run()
+
+    assert backend.adds == []
+    assert len(results) == 2
+    assert all(result.type.value == "search" for result in results)
+
+
+@pytest.mark.asyncio
+async def test_preingest_failure_aborts_the_measured_run():
+    ds = FakeDataset(n_memories=20)
+    backend = FakeBackend()
+    backend.fail_every = 1
+    cfg = RunConfig(users=1, ops=2, seed=0, preingest=True)
+    runner = LoadRunner(client=backend, dataset=ds, scenario=SearchLoad(), config=cfg)
+
+    with pytest.raises(RuntimeError, match=r"pre-ingest failed.*u0.*RuntimeError"):
+        await runner.run()
+
+    assert backend.searches == []
+    assert runner.recorder.raw() == []
+
+
+@pytest.mark.asyncio
 async def test_preingest_off_by_default():
     ds = FakeDataset(n_memories=20)
     backend = FakeBackend()

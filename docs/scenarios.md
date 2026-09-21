@@ -304,7 +304,8 @@ offset so passes are not identical. `top_k` comes from the `QueryItem`
 **Pre-ingest:** essential here. `--preingest` fills each user's memories
 before the measured run, under the global concurrency cap, ingesting a
 `--preingest-fraction` (default 1.0 = all) of each user's `memory_stream`.
-Pre-ingest is excluded from metrics.
+`0` ingests nothing. Pre-ingest is excluded from metrics; a backend failure
+aborts the run before measured requests begin.
 
 **Termination:** `--duration` or `--ops`.
 

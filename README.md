@@ -265,11 +265,14 @@ With `--output DIR`, LTM100 writes:
 
 - `summary.json` — aggregated metrics with offered, accepted, successful,
   error, and rejected counts/rates. `throughput_ops_s` and `qps` are successful
-  throughput; latency percentiles contain successful requests only. Rejection
-  rate is rejected/offered and error rate is backend errors/accepted.
-  `items.empty_rate` remains the fraction of successful searches returning
-  nothing. `meta` records the run config plus the server's own build
-  (`meta.build`, probed from `/api/v2/health`).
+  throughput; latency percentiles (p50/p90/p95/p99/max) contain successful
+  requests only. Rejection rate is rejected/offered and error rate is backend
+  errors/accepted. `items.empty_rate` remains the fraction of successful
+  searches returning nothing (a 0% error rate alone cannot tell a working
+  search from a silent one). `meta` records the run config plus the server's
+  own build (`meta.build`, probed from `/api/v2/health`). For multi-process
+  runs these are the whole-run settings, not one shard's share; `started_at`
+  and `ended_at` bracket the complete run lifecycle.
 - `summary.csv` — the same summary as a flat table, with an overall `all` row
   (throughput/qps only; latency cells blank since mixing add/search latencies is
   ambiguous).

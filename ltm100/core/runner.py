@@ -239,6 +239,8 @@ class LoadRunner:
         """Ingest a fraction of each user's memory stream, concurrently across
         users, with the global concurrency cap applied. Not recorded."""
         frac = max(0.0, min(self.config.preingest_fraction, 1.0))
+        if frac == 0.0:
+            return
 
         async def ingest_one(user: UserId) -> None:
             items = list(self.dataset.memory_stream(user))
@@ -258,7 +260,20 @@ class LoadRunner:
             else:
                 await ingest_one(user)
 
-        await asyncio.gather(*[guarded(u) for u in users], return_exceptions=True)
+        outcomes = await asyncio.gather(
+            *[guarded(u) for u in users], return_exceptions=True
+        )
+        failures = [
+            (user, outcome)
+            for user, outcome in zip(users, outcomes)
+            if isinstance(outcome, BaseException)
+        ]
+        if failures:
+            user, error = failures[0]
+            raise RuntimeError(
+                f"pre-ingest failed for {len(failures)} user(s); first failure "
+                f"for {user}: {type(error).__name__}: {error}"
+            ) from error
 
     def _ramp_delay(self, index: int, total: int) -> float:
         if self.config.rampup <= 0 or total <= 1:
