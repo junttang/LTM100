@@ -92,7 +92,9 @@ ltm100 run --config examples/memmachine.yaml \
 ```
 
 Model the LLM answer time and the user's typing time so the load shape
-resembles a real chatbot session (both default to 0 = back-to-back):
+resembles a real chatbot session (both default to 0 = back-to-back). The
+answer delay falls between storing the user turn and storing the following
+assistant turn:
 
 ```sh
 ltm100 run --config examples/memmachine.yaml \

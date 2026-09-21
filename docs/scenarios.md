@@ -220,9 +220,10 @@ time reading/typing before the next turn. These are modeled as two *mean*
 delays (Exponential, the same distribution the open-model arrival process
 uses):
 
-- `--answer-time T`: a delay ~Exp(mean=T) is attached to the **last ADD** of
-  each user turn — the assistant turn's adds (the LLM writing its answer)
-  happen during this gap. Models LLM answer-generation time.
+- `--answer-time T`: a delay ~Exp(mean=T) is attached to the **first ADD** of
+  the following assistant turn. Since `Op.delay` is applied before the op,
+  the user turn is stored first, then the LLM generation gap occurs, and then
+  the assistant answer is stored.
 - `--user-gap T`: a delay ~Exp(mean=T) is attached to the **first** op (the
   recall SEARCH, or the first ADD if recall is skipped via `search_every`)
   of a user turn, except the very first user turn of each replay pass (so

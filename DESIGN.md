@@ -498,9 +498,13 @@ Resolved during implementation:
   running a baseline search under their label.
 - **chat-replay LLM timing**: `chat-replay` models the LLM answer time
   (`answer_time`) and the user's think/typing time (`user_gap`) as
-  Exponential-mean delays attached to specific ops, defaulting to 0
-  (back-to-back). Search depth is configurable via `top_k` (default 20).
-  All applied uniformly to every user for now.
+  Exponential-mean delays attached before the following assistant add and
+  the next user op, respectively, defaulting to 0 (back-to-back). Search depth
+  is configurable via `top_k` (default 20). All applied uniformly to every
+  user for now.
+- **mixed think timing**: both ADD and SEARCH operations receive
+  `uniform(0, think)` delay. ADD delay uses a separate seeded RNG stream so
+  enabling it does not change the established add/search operation mix.
 
 Still open / next work (priority order):
 1. **Per-user in-flight > 1** — currently fixed at 1 in the runner; make it a

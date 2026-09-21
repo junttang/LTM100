@@ -228,7 +228,9 @@ class Mixed:
         dataset: DatasetAdapter,
         rng_state: dict[str, Any],
     ) -> Iterator[Op]:
-        rng = random.Random(_seed_for(rng_state.get("seed", 0), user))
+        seed = rng_state.get("seed", 0)
+        rng = random.Random(_seed_for(seed, user))
+        add_delay_rng = random.Random(_seed_for(seed, f"{user}:mixed-add-delay"))
         memories = _memories(dataset, user)
         if not memories:
             return
@@ -237,15 +239,19 @@ class Mixed:
         i_q = 0
         # Infinite: the runner bounds consumption per session / over duration.
         while True:
-            if rng.random() < self.search_weight:
+            is_search = rng.random() < self.search_weight
+            if is_search:
                 q = queries[i_q % len(queries)]
                 i_q += 1
+                # Keep the existing search RNG stream unchanged so enabling
+                # add think time does not alter the seeded add/search mix.
                 delay = rng.uniform(0.0, self.think)
                 yield Op(type=OpType.SEARCH, query=q, delay=delay)
             else:
                 item = memories[i_add % len(memories)]
                 i_add += 1
-                yield Op(type=OpType.ADD, items=[item], delay=0.0)
+                delay = add_delay_rng.uniform(0.0, self.think)
+                yield Op(type=OpType.ADD, items=[item], delay=delay)
 
 
 class ChatReplay:
@@ -283,9 +289,9 @@ class ChatReplay:
     *mean* delays attached to the ops that follow them:
 
       - `answer_time`: an Exponential(mean=answer_time) delay is attached to
-        the **last** ADD of a user turn — the assistant turn's ADDs (the LLM
-        answer being written) happen during this gap. Models LLM generation
-        time.
+        the **first** ADD of the following assistant turn. Because `Op.delay`
+        is applied before an op, this puts generation time after the user turn
+        has been stored and before the assistant answer is stored.
       - `user_gap`: an Exponential(mean=user_gap) delay is attached to the
         **first** SEARCH (or first ADD if recall is skipped) of a user turn —
         the user is reading/typing while nothing happens at the LTM. Models
@@ -358,8 +364,11 @@ class ChatReplay:
             return
         while True:  # wrap the conversation for sustained load
             user_turn_idx = 0
+            previous_user_turn = False
             for t_i, turn in enumerate(turns):
-                is_user = turn.role.lower() == "user"
+                role = turn.role.lower()
+                is_user = role == "user"
+                is_assistant = role == "assistant"
                 turn_ops: list[Op] = []
                 if is_user and turn.items:
                     if user_turn_idx % self.search_every == 0:
@@ -393,13 +402,21 @@ class ChatReplay:
                     if is_user and t_i > 0 and self.user_gap > 0:
                         extra = rng.expovariate(1.0 / self.user_gap)
                         turn_ops[0] = replace(turn_ops[0], delay=turn_ops[0].delay + extra)
-                    # answer_time: the LLM generating the answer (assistant turn)
-                    # happens during the gap after a user turn's last add.
-                    if is_user and self.answer_time > 0:
+                    # Op.delay is applied before execution. Put answer time on
+                    # the first assistant add so the user turn is stored first,
+                    # then generation happens, then the answer is stored.
+                    if (
+                        is_assistant
+                        and previous_user_turn
+                        and self.answer_time > 0
+                    ):
                         extra = rng.expovariate(1.0 / self.answer_time)
-                        turn_ops[-1] = replace(turn_ops[-1], delay=turn_ops[-1].delay + extra)
+                        turn_ops[0] = replace(
+                            turn_ops[0], delay=turn_ops[0].delay + extra
+                        )
                     for op in turn_ops:
                         yield op
+                previous_user_turn = is_user and bool(turn_ops)
 
 
 SCENARIOS: dict[str, type] = {
