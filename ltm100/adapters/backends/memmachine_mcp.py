@@ -34,7 +34,7 @@ import logging
 from typing import Any
 
 from ltm100.adapters.backends.memmachine import _parse_episodes
-from ltm100.adapters.transports.mcp import McpError, McpTransport
+from ltm100.adapters.transports.mcp import McpTransport
 from ltm100.adapters.transports.rest import RestError, RestTransport
 from ltm100.common import MemoryItem, QueryItem, ResultItem, UserId
 
@@ -80,12 +80,12 @@ class MemMachineMcpClient:
 
     # -- lifecycle ---------------------------------------------------------
 
-    async def __aenter__(self) -> "MemMachineMcpClient":
+    async def __aenter__(self) -> MemMachineMcpClient:  # noqa: PYI034
         await self._rest.open()
         await self._mcp.open()
         return self
 
-    async def __aexit__(self, *exc: Any) -> None:
+    async def __aexit__(self, *exc: object) -> None:
         await self._mcp.close()
         await self._rest.close()
 
@@ -153,10 +153,7 @@ class MemMachineMcpClient:
             }
             if item.producer is not None:
                 payload["user_id"] = item.producer
-            try:
-                await self._mcp.call_tool("add_memory", payload)
-            except McpError:
-                raise
+            await self._mcp.call_tool("add_memory", payload)
             # No uid is returned; record a placeholder so n_items counts sent
             # items consistently with the caller's expectation of one id per
             # item. The runner records n_items = len(uids) = len(items).

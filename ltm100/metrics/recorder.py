@@ -58,4 +58,4 @@ class InMemoryRecorder:
         return list(self._results)
 
 
-__all__ = ["MetricsRecorder", "InMemoryRecorder"]
+__all__ = ["InMemoryRecorder", "MetricsRecorder"]

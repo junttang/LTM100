@@ -7,8 +7,9 @@ carry no backend-specific or dataset-specific fields.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Iterator, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 # A virtual-user identifier. Opaque to the core; backends map it to a tenant key.
 UserId = str

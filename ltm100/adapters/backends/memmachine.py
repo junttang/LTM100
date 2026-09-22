@@ -58,11 +58,11 @@ class MemMachineClient:
 
     # -- lifecycle ---------------------------------------------------------
 
-    async def __aenter__(self) -> "MemMachineClient":
+    async def __aenter__(self) -> MemMachineClient:  # noqa: PYI034
         await self._transport.open()
         return self
 
-    async def __aexit__(self, *exc: Any) -> None:
+    async def __aexit__(self, *exc: object) -> None:
         await self._transport.close()
 
     def _tenant(self, user: UserId) -> tuple[str, str]:

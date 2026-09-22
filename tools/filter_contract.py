@@ -146,7 +146,7 @@ def checks(base: str, org: str) -> list[tuple[str, str, str]]:
                 out.append((name, "", str(e)))
             except Fail as e:
                 out.append((name, str(e), ""))
-            except Exception as e:  # a broken check must not read as a pass
+            except Exception as e:  # noqa: BLE001 - report broken checks as failures
                 out.append((name, f"{type(e).__name__}: {e}", ""))
             return fn
         return wrap
@@ -282,14 +282,14 @@ def main(argv: list[str]) -> int:
         owned = prepare(args.base_url, args.org)
         load(args.base_url, args.org)
         results = checks(args.base_url, args.org)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - report fixture setup failures
         setup_error = f"{type(e).__name__}: {e}"
     finally:
         if owned and not args.keep:
             try:
                 post(args.base_url, "/api/v2/projects/delete",
                      {"org_id": args.org, "project_id": PROJECT})
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - cleanup is best-effort
                 print(f"  note: could not delete the fixture project: {e}")
 
     if setup_error:

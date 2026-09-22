@@ -12,8 +12,8 @@ from ltm100.adapters.datasets.synthetic import SyntheticAdapter
 from ltm100.common import QueryItem
 from ltm100.core import scenarios
 from ltm100.core.config import RunConfig
-from ltm100.core.scenarios import AddLoad, Mixed, SearchLoad
 from ltm100.core.op import OpResult, OpType
+from ltm100.core.scenarios import AddLoad, Mixed, SearchLoad
 from ltm100.metrics.aggregate import aggregate
 
 
@@ -164,9 +164,10 @@ def test_a_backend_without_health_is_simply_omitted(monkeypatch):
 def test_the_report_meta_carries_the_build(tmp_path, monkeypatch, capsys):
     """The probe is only useful if _run actually puts it in the report."""
     import json as _json
+
     import yaml as _yaml
 
-    import ltm100.cli as cli
+    from ltm100 import cli
 
     cfg_path = tmp_path / "c.yaml"
     cfg_path.write_text(_yaml.safe_dump({
@@ -333,7 +334,7 @@ def test_single_process_is_unchanged():
 
 def test_sharding_divides_concurrency_rate_ops_and_queue():
     """Each shard runs its own runner, so an undivided budget applies N times."""
-    import ltm100.cli as cli
+    from ltm100 import cli
 
     args = cli.build_parser().parse_args([
         "run", "--config", "x", "--scenario", "chat-replay",
@@ -359,6 +360,7 @@ def test_sharding_divides_concurrency_rate_ops_and_queue():
 def test_length_zero_yields_no_samples(tmp_path):
     """The streaming path and the json.load fallback must agree."""
     import json
+
     from ltm100.adapters.datasets.longmemeval import LongMemEvalAdapter
 
     p = tmp_path / "d.json"
@@ -369,7 +371,7 @@ def test_length_zero_yields_no_samples(tmp_path):
 
 def test_sharding_divides_a_count_based_budget():
     """--ops caps the whole run, so each shard gets a share of it."""
-    import ltm100.cli as cli
+    from ltm100 import cli
 
     args = cli.build_parser().parse_args([
         "run", "--config", "x", "--scenario", "chat-replay",
@@ -387,13 +389,16 @@ def test_sharding_divides_a_count_based_budget():
 def _captured_search_payload(**query_kwargs):
     """Run MemMachineClient.search against a stub transport, return the payload."""
     import asyncio
+
     from ltm100.adapters.backends.memmachine import MemMachineClient
     from ltm100.common import QueryItem
 
     seen = {}
 
     class _Stub:
-        headers: dict = {}
+        def __init__(self):
+            self.headers: dict = {}
+
         async def request(self, method, path, json=None, params=None):
             seen["path"] = path
             seen["payload"] = json
@@ -431,8 +436,8 @@ def test_zero_expand_is_treated_as_off():
 
 def test_scenarios_propagate_the_knobs_to_every_query():
     """A knob set on the CLI is useless if the scenario drops it."""
-    from ltm100.core.scenarios import get_scenario
     from ltm100.adapters.datasets.synthetic import SyntheticAdapter
+    from ltm100.core.scenarios import get_scenario
 
     ds = SyntheticAdapter(memories_per_user=6)
     for name in ("search-load", "mixed"):
@@ -467,6 +472,7 @@ def test_synthetic_categories_give_a_field_to_filter_on():
 def test_mcp_refuses_the_knobs_it_cannot_honour():
     """Silently ignoring them would label a baseline search as filtered."""
     import asyncio
+
     from ltm100.adapters.backends.memmachine_mcp import MemMachineMcpClient
     from ltm100.common import QueryItem
 
@@ -489,6 +495,7 @@ def test_mcp_refuses_the_isolation_scope_options_by_name():
 
 def test_mcp_refuses_metadata_it_would_drop():
     import asyncio
+
     from ltm100.adapters.backends.memmachine_mcp import MemMachineMcpClient
     from ltm100.common import MemoryItem
 

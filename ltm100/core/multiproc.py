@@ -17,7 +17,8 @@ loop and open sockets, which asyncio does not support.
 from __future__ import annotations
 
 import multiprocessing as mp
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from ltm100.core.op import OpResult
 

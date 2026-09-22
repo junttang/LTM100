@@ -36,10 +36,11 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
-from ltm100.common import DatasetAdapter, MemoryItem, Turn, UserId
+from ltm100.common import MemoryItem, Turn, UserId
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +192,9 @@ class LongMemEvalAdapter:
             if self.length is not None:
                 num_rows = min(self.length, num_rows)
             records = ds.select(range(num_rows)).to_list()
-        except Exception:
+        # Loading can fail for backend-, cache-, authentication-, or schema-
+        # specific reasons. Preserve the existing direct-download fallback.
+        except Exception:  # noqa: BLE001
             from huggingface_hub import hf_hub_download
 
             data_path = hf_hub_download(
@@ -284,4 +287,4 @@ class LongMemEvalAdapter:
                 yield Turn(role=role, items=items)
 
 
-__all__ = ["LongMemEvalAdapter", "_split_chunks", "_collect_turn_contents"]
+__all__ = ["LongMemEvalAdapter", "_collect_turn_contents", "_split_chunks"]

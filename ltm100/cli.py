@@ -25,7 +25,11 @@ from ltm100.core.multiproc import run_shards
 from ltm100.core.runner import LoadRunner
 from ltm100.core.scenarios import get_scenario
 from ltm100.metrics.aggregate import aggregate
-from ltm100.metrics.report import write_raw_ndjson, write_summary_csv, write_summary_json
+from ltm100.metrics.report import (
+    write_raw_ndjson,
+    write_summary_csv,
+    write_summary_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +141,7 @@ def _backend_build(cfg) -> dict:
 
     try:
         reported = asyncio.run(probe())
-    except Exception as e:  # a failed probe must not cost the run
+    except Exception as e:  # noqa: BLE001 - a failed probe must not cost the run
         return {"build": f"<unavailable: {type(e).__name__}>"}
     if not reported:
         return {}
@@ -404,9 +408,12 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    if not getattr(args, "duration", 0) and not getattr(args, "ops", 0):
-        if args.command == "run":
-            parser.error("run requires either --duration or --ops")
+    if (
+        not getattr(args, "duration", 0)
+        and not getattr(args, "ops", 0)
+        and args.command == "run"
+    ):
+        parser.error("run requires either --duration or --ops")
     # The run path owns its own event loops (one per shard process), so only
     # the coroutine commands are wrapped here.
     result = args.func(args)

@@ -23,7 +23,6 @@ import asyncio
 import logging
 import random
 import time
-from typing import Any
 
 from ltm100.common import DatasetAdapter, LTMClient, UserId
 from ltm100.core.config import RunConfig
@@ -245,7 +244,7 @@ class LoadRunner:
         async def ingest_one(user: UserId) -> None:
             items = list(self.dataset.memory_stream(user))
             if frac < 1.0:
-                keep = max(1, int(round(frac * len(items))))
+                keep = max(1, round(frac * len(items)))
                 items = items[:keep]
             batch = getattr(self.client, "add_batch_size", 50)
             for start in range(0, len(items), batch):

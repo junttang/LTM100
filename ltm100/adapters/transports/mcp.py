@@ -43,11 +43,11 @@ class McpTransport:
         self.timeout = timeout
         self._client: Client | None = None
 
-    async def __aenter__(self) -> "McpTransport":
+    async def __aenter__(self) -> McpTransport:  # noqa: PYI034
         await self.open()
         return self
 
-    async def __aexit__(self, *exc: Any) -> None:
+    async def __aexit__(self, *exc: object) -> None:
         await self.close()
 
     async def open(self) -> None:
@@ -77,7 +77,7 @@ class McpTransport:
             raise McpError("MCP transport is not open")
         try:
             result = await self._client.call_tool(name, arguments)
-        except Exception as e:  # noqa: BLE001 - surface any call failure
+        except Exception as e:
             raise McpError(f"MCP call {name!r} failed: {e}") from e
         data = result.data
         # Tool failures come back as a McpResponse(status, message) rather
@@ -96,4 +96,4 @@ class McpTransport:
         return data
 
 
-__all__ = ["McpTransport", "McpError"]
+__all__ = ["McpError", "McpTransport"]

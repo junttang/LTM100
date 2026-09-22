@@ -31,15 +31,15 @@ Scenarios here:
 from __future__ import annotations
 
 import random
+from collections.abc import Iterator
 from dataclasses import replace
-from typing import Any, Iterator
+from typing import Any
 from weakref import WeakKeyDictionary
 
 from ltm100.common import DatasetAdapter, MemoryItem, QueryItem, UserId
 from ltm100.core.op import Op, OpType, Scenario
 
-
-_MEMO: "WeakKeyDictionary[DatasetAdapter, dict[UserId, list[MemoryItem]]]" = (
+_MEMO: WeakKeyDictionary[DatasetAdapter, dict[UserId, list[MemoryItem]]] = (
     WeakKeyDictionary()
 )
 
@@ -414,8 +414,7 @@ class ChatReplay:
                         turn_ops[0] = replace(
                             turn_ops[0], delay=turn_ops[0].delay + extra
                         )
-                    for op in turn_ops:
-                        yield op
+                    yield from turn_ops
                 previous_user_turn = is_user and bool(turn_ops)
 
 
@@ -435,10 +434,10 @@ def get_scenario(name: str, **kwargs: Any) -> Scenario:
 
 
 __all__ = [
-    "ChatReplay",
-    "AddLoad",
-    "SearchLoad",
-    "Mixed",
     "SCENARIOS",
+    "AddLoad",
+    "ChatReplay",
+    "Mixed",
+    "SearchLoad",
     "get_scenario",
 ]
