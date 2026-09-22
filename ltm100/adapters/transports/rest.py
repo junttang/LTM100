@@ -37,11 +37,11 @@ class RestTransport:
         self.retry_backoff = retry_backoff
         self._session: aiohttp.ClientSession | None = None
 
-    async def __aenter__(self) -> "RestTransport":
+    async def __aenter__(self) -> RestTransport:  # noqa: PYI034
         await self.open()
         return self
 
-    async def __aexit__(self, *exc: Any) -> None:
+    async def __aexit__(self, *exc: object) -> None:
         await self.close()
 
     async def open(self) -> None:
@@ -107,4 +107,4 @@ class RestError(RuntimeError):
     """Raised when the server returns an HTTP error status."""
 
 
-__all__ = ["RestTransport", "RestError"]
+__all__ = ["RestError", "RestTransport"]

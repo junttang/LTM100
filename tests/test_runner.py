@@ -8,7 +8,7 @@ type, error handling, global concurrency cap, and metric recording.
 from __future__ import annotations
 
 import asyncio
-from typing import Iterator
+from collections.abc import Iterator
 
 import pytest
 
@@ -105,7 +105,6 @@ async def test_search_load_emits_searches_only():
 async def test_search_load_top_k_forwarded():
     """--top-k (a scenario constructor param) reaches the backend as
     QueryItem.top_k on every search op."""
-    from ltm100.common import QueryItem
 
     seen_top_k: list[int] = []
 

@@ -8,8 +8,9 @@ the same `Op` primitive; the difference is how the runner consumes the plan.
 from __future__ import annotations
 
 import enum
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Iterator, Protocol
+from typing import Any, Protocol
 
 from ltm100.common import DatasetAdapter, MemoryItem, QueryItem, UserId
 
@@ -75,4 +76,4 @@ class Scenario(Protocol):
         ...
 
 
-__all__ = ["OpType", "Op", "OpResult", "Scenario"]
+__all__ = ["Op", "OpResult", "OpType", "Scenario"]

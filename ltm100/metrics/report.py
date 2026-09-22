@@ -142,4 +142,4 @@ def write_raw_ndjson(results: list[OpResult], path: str | Path) -> None:
             f.write(json.dumps(row) + "\n")
 
 
-__all__ = ["write_summary_json", "write_summary_csv", "write_raw_ndjson"]
+__all__ = ["write_raw_ndjson", "write_summary_csv", "write_summary_json"]

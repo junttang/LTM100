@@ -14,9 +14,9 @@ It is a real DatasetAdapter (registered as "synthetic"), not a test fixture.
 from __future__ import annotations
 
 import random
-from typing import Iterator
+from collections.abc import Iterator
 
-from ltm100.common import DatasetAdapter, MemoryItem, UserId
+from ltm100.common import MemoryItem, UserId
 
 
 class SyntheticAdapter:
@@ -59,7 +59,7 @@ class SyntheticAdapter:
 
 
 def _filler(rng: random.Random, n: int) -> str:
-    words = "the quick brown fox jumps over a lazy dog while memory systems store and retrieve".split()
+    words = ["the", "quick", "brown", "fox", "jumps", "over", "a", "lazy", "dog", "while", "memory", "systems", "store", "and", "retrieve"]
     out = []
     while len(out) < n // 4 + 1:
         out.append(rng.choice(words))

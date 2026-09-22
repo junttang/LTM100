@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from typing import Iterable
+from collections.abc import Iterable
 
 from ltm100.core.op import OpResult
 

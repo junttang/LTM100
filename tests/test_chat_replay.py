@@ -310,7 +310,6 @@ async def test_chat_replay_rejects_negative_timing_params():
 async def test_chat_replay_top_k_forwarded_to_recall_queries():
     """--top-k controls the recall search depth: the QueryItem.top_k of every
     recall SEARCH reflects the configured top_k (default 20, overridable)."""
-    import itertools
 
     ds = DialogueDataset()
     # default -> 20

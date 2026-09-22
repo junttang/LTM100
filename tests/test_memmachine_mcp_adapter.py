@@ -23,7 +23,7 @@ class FakeMcpTransport:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
 
-    async def __aenter__(self) -> "FakeMcpTransport":
+    async def __aenter__(self) -> FakeMcpTransport:  # noqa: PYI034
         return self
 
     async def __aexit__(self, *exc) -> None:
