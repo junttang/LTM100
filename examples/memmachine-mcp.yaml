@@ -1,17 +1,24 @@
-# LTM100 example config: synthetic dataset + MemMachine backend over MCP.
+# Chat replay: LongMemEval dataset + MemMachine backend over MCP.
 #
 # Drives add/search through MemMachine's MCP tools (add_memory / search_memory)
 # mounted at /mcp on the same server. Lifecycle (project create/delete) still
 # uses REST, since MCP has no project-management tools.
+#
+# LongMemEval provides the dialogue turn_stream required by chat-replay.
+# Install both optional extras before running this example:
+#   pip install -e ".[datasets,mcp]"
 #
 # Run with:
 #   ltm100 run --config examples/memmachine-mcp.yaml \
 #       --scenario chat-replay --users 20 --duration 30 --seed 0
 
 dataset:
-  name: synthetic
-  memories_per_user: 100
-  content_chars: 200
+  name: longmemeval
+  # Default: download from Hugging Face. To use a local copy instead,
+  # uncomment path; when path is set, it takes precedence over split.
+  # path: ~/longmemeval/longmemeval_s_cleaned.json
+  split: longmemeval_s_cleaned
+  length: 100
 
 backend:
   name: memmachine-mcp

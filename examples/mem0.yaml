@@ -1,8 +1,12 @@
 # LTM100 example config: synthetic dataset + self-hosted Mem0 OSS REST backend.
 #
+# Synthetic data supports add-load, search-load, and mixed, but not
+# chat-replay. The mixed example pre-ingests data so searches start non-empty.
+#
 # Run with:
 #   ltm100 run --config examples/mem0.yaml \
-#       --scenario mixed --users 20 --duration 30 --seed 0
+#       --scenario mixed --users 20 --duration 30 --seed 0 \
+#       --search-weight 0.8 --preingest --preingest-fraction 1.0
 
 dataset:
   name: synthetic

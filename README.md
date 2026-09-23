@@ -68,12 +68,14 @@ A run takes two inputs:
 
 - A **YAML config file** (stable, per environment): backend endpoint/auth,
   transport, and the dataset and backend adapter choices. See
-  `examples/memmachine.yaml` and `examples/synthetic.yaml`.
+  [`examples/README.md`](examples/README.md) for the config/scenario
+  compatibility matrix.
 - **CLI flags** (per run): number of users, scenario, duration/ops, seed,
   load model, concurrency, warm-up, and output. See `ltm100 run --help`.
 
 Edit `examples/*.yaml` to point at your LTM server (`backend.base_url`) and
-pick a dataset.
+pick a dataset. Use a LongMemEval example for `chat-replay`; synthetic
+examples support `add-load`, `search-load`, and `mixed`.
 
 ## Quick start
 
@@ -161,7 +163,8 @@ ltm100 run --config examples/synthetic.yaml \
 Drive add/search through MemMachine's `add_memory` / `search_memory` MCP
 tools instead of REST — same `LTMClient` contract, so the workload and flags
 are identical; only the config changes. Useful to compare REST vs MCP
-overhead on the same load. (Requires `pip install -e ".[mcp]"`.)
+overhead on the same load. This example uses LongMemEval and requires
+`pip install -e ".[datasets,mcp]"`.
 
 ```sh
 ltm100 run --config examples/memmachine-mcp.yaml \
