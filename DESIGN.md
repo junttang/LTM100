@@ -3,15 +3,15 @@
 > Status: **Implemented (baseline verified against a live MemMachine
 > server).** This document is the design reference; the README is the fast
 > entry point and `docs/` holds the per-topic detail.
-> Last updated: 2026-09-11
+> Last updated: 2026-09-23
 
 ## 1. Purpose
 
 LTM100 is a benchmark for evaluating Long-Term Memory (LTM) software solutions
 (e.g. MemMachine, Mem0) in a **server-client, multi-user** setting. Its core is
 not retrieval/answer quality — it is **how an LTM server behaves when many users
-repeatedly perform `add`, `search`, and `add&search` operations against a single
-endpoint.**
+repeatedly perform `add`, `search`, and mixed add/search workloads against a
+single endpoint.**
 
 The benchmark generates realistic and synthetic load, drives a running LTM
 server through its client API, and extracts performance/load metrics
@@ -560,9 +560,9 @@ Still open / next work (priority order):
    episodic-only `types` with a config option (semantic adds LLM background
    processing load). The MCP transport is already all-types by the tool's
    design. Synergy with Mem0.
-5. **Additional datasets** (BEAM, LoCoMo) via the `DatasetAdapter` extension
+4. **Additional datasets** (BEAM, LoCoMo) via the `DatasetAdapter` extension
    (must implement `memory_stream`, and `turn_stream` if dialogue).
-6. **Ramp-up / warm-up steady-state filtering** — the `warmup` field exists;
+5. **Ramp-up / warm-up steady-state filtering** — the `warmup` field exists;
    verify steady-state metric exclusion at scale.
 
 ## 14. Glossary

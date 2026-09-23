@@ -1,129 +1,48 @@
 # LTM100
 
-LTM100 is an end-to-end multi-user **load benchmark** for Long-Term Memory (LTM) systems
-(e.g. MemMachine, Mem0). It drives many virtual users performing `add`,
-`search`, and `add&search` operations against a single LTM endpoint and
-reports client-observable performance metrics: throughput, QPS, latency
-percentiles, and error rate, all split by operation type.
+LTM100 is an end-to-end multi-user **load benchmark** for Long-Term Memory
+(LTM) systems. It drives virtual users through realistic and focused memory
+workloads and reports client-observable throughput, latency, rejection, and
+error metrics.
 
-This benchmark measures **load, concurrency, and scalability behavior** —
-not retrieval or answer quality. There are no precision/recall/MRR metrics.
-Server-side resource metrics (CPU, memory, etc.) are collected separately by
-the server itself.
+LTM100 measures **load, concurrency, and scalability behavior**, not retrieval
+or answer quality. It does not compute precision, recall, or MRR.
 
-## Status
+Current release: **v0.4.2**
 
-Version: **v0.4.1** (see [Versioning](#versioning)).
+## Highlights
 
-Early development. Datasets and LTM backends are pluggable; the initial
-baseline is the LongMemEval dataset + the MemMachine backend over REST.
-
-Implemented:
-- Closed and open load models (every scenario runs under both).
-- Scenarios: `chat-replay` (the primary workload), `add-load`, `search-load`,
-  `mixed`. All wrap their data streams to sustain load and search on
-  content-derived queries.
-- Congestion policy (bounded queue with rejection) for the open model.
-- Multi-process load generation (`--procs N`), so a fast server is not
-  bottlenecked on one event-loop core.
-- Warm-up / pre-ingest before the measured run.
-- Datasets: LongMemEval (local file or HuggingFace; large local files are
-  streamed with `ijson`), synthetic (with optional `categories` for
-  `--filter`).
-- Backends: MemMachine (REST and MCP transports) and Mem0 OSS (REST); REST
-  retries connection-level failures only (`retries` option).
-- Server-side search knobs: `--expand` (expand_context) and `--filter`
-  (metadata filter), forwarded to every search; the MCP backend refuses
-  them loudly rather than ignoring them.
-- Configurable scenario parameters on the CLI (`--think`, `--search-every`,
-  `--search-weight`, `--top-k`, `--answer-time`, `--user-gap`, `--expand`,
-  `--filter`).
-- Reports: summary JSON/CSV + optional raw NDJSON, with per-op
-  `items.empty_rate` and the server build recorded in `meta.build`.
-- Server-side latency metrics: `--server-metrics` scrapes the server's own
-  Prometheus histograms around the measured window and reports per-phase
-  add/search breakdowns; an adapter implements the query to declare it
-  (currently MemMachine REST), others warn and run without it.
-
-Planned (see [DESIGN.md](./DESIGN.md) for the full roadmap):
-- Per-user in-flight > 1; per-user-group finer control;
-  configurable memory types; additional datasets (BEAM, LoCoMo).
+- Closed and open load models for fixed-concurrency and arrival-driven tests.
+- Four scenarios: `chat-replay`, `add-load`, `search-load`, and `mixed`.
+- Bounded admission and rejection accounting for overload experiments.
+- Multi-process load generation so the benchmark client can scale beyond one
+  event-loop core.
+- Optional pre-ingest, ramp-up, raw request records, and server-side latency
+  metrics.
+- Pluggable datasets and backend adapters.
+- JSON and CSV reports with successful, error, and rejected traffic separated.
 
 ## Install
 
 ```sh
 pip install -e ".[dev]"
-# To use the LongMemEval adapter via HuggingFace also:
-pip install -e ".[datasets]"
-# To use the MemMachine MCP transport also:
-pip install -e ".[mcp]"
 ```
 
-The `ltm100` CLI is the entry point. In this environment it is invoked as
-`python -m ltm100.cli` if the console script is not on PATH.
+Install optional dependencies when needed:
 
-## Configuration
+```sh
+pip install -e ".[dev,datasets]"      # LongMemEval via Hugging Face
+pip install -e ".[dev,datasets,mcp]"  # LongMemEval + MCP transport
+```
 
-A run takes two inputs:
-
-- A **YAML config file** (stable, per environment): backend endpoint/auth,
-  transport, and the dataset and backend adapter choices. See
-  [`examples/README.md`](examples/README.md) for the config/scenario
-  compatibility matrix.
-- **CLI flags** (per run): number of users, scenario, duration/ops, seed,
-  load model, concurrency, warm-up, and output. See `ltm100 run --help`.
-
-Edit `examples/*.yaml` to point at your LTM server (`backend.base_url`) and
-pick a dataset. Use a LongMemEval example for `chat-replay`; synthetic
-examples support `add-load`, `search-load`, and `mixed`.
+LTM100 requires Python 3.10 or later. The `ltm100` command is the primary
+entry point; `python -m ltm100.cli` is equivalent when the console script is
+not on `PATH`.
 
 ## Quick start
 
-First, make sure your LTM server is up (e.g. MemMachine at
-`http://localhost:8080`), then run one of the scenarios below. `chat-replay`
-is the primary workload; the others are auxiliary load probes.
-
-### Chatbot-LTM integration (`chat-replay`, the primary workload)
-
-Replay a multi-turn dialogue as a chatbot-with-LTM would: before each user
-turn, recall (search) against the user's utterance, then ingest both the
-user and assistant turns. Requires a dataset with a `turn_stream`
-(LongMemEval, not synthetic); the run fails loudly otherwise. The dialogue
-wraps, so a `--duration` run replays it as many times as needed.
-
-```sh
-ltm100 run --config examples/memmachine.yaml \
-    --scenario chat-replay --users 10 --duration 60 --seed 0 \
-    --output out/chat-replay
-```
-
-Model the LLM answer time and the user's typing time so the load shape
-resembles a real chatbot session (both default to 0 = back-to-back). The
-answer delay falls between storing the user turn and storing the following
-assistant turn:
-
-```sh
-ltm100 run --config examples/memmachine.yaml \
-    --scenario chat-replay --users 10 --duration 60 --seed 0 \
-    --answer-time 2.0 --user-gap 3.0 \
-    --output out/chat-replay
-```
-
-Run the same chatbot workload under realistic arrival timing (open model):
-users arrive per a Poisson process and the congestion policy applies — the
-recall cadence and turn content are unchanged.
-
-```sh
-ltm100 run --config examples/memmachine.yaml \
-    --scenario chat-replay --users 10 --duration 30 --seed 0 \
-    --model open --arrival-rate 2.0 --session-ops 12 \
-    --global-concurrency 8 --queue-bound 4 \
-    --output out/chat-replay-open
-```
-
-### Storage throughput (`add-load`, closed)
-
-Pure add pressure — measure how fast the server ingests memories.
+Point an example YAML at a running LTM endpoint, then choose a scenario and a
+termination condition:
 
 ```sh
 ltm100 run --config examples/synthetic.yaml \
@@ -131,220 +50,89 @@ ltm100 run --config examples/synthetic.yaml \
     --output out/add-load
 ```
 
-### Search throughput & latency (`search-load`, closed)
-
-Pre-ingest memories, then loop searches. `--preingest` fills each user's
-memories before the measured run; `--preingest-fraction` controls how much.
-
-```sh
-ltm100 run --config examples/synthetic.yaml \
-    --scenario search-load --users 20 --duration 30 --seed 0 \
-    --preingest --preingest-fraction 1.0 \
-    --output out/search-load
-```
-
-### Arrival-driven congestion probe (`mixed`, open)
-
-A flat add/search mixture with a tunable search ratio — needs no dialogue,
-so it runs against the synthetic dataset. Overload beyond the queue bound
-is rejected; sweep `--arrival-rate` to find the server's capacity.
-
-```sh
-ltm100 run --config examples/synthetic.yaml \
-    --scenario mixed --users 8 --duration 20 --seed 0 \
-    --model open --arrival-rate 5.0 --session-ops 6 \
-    --queue-bound 4 --global-concurrency 4 --search-weight 0.8 \
-    --preingest --preingest-fraction 0.5 \
-    --output out/mixed
-```
-
-### MCP transport (same workload, MCP tools)
-
-Drive add/search through MemMachine's `add_memory` / `search_memory` MCP
-tools instead of REST — same `LTMClient` contract, so the workload and flags
-are identical; only the config changes. Useful to compare REST vs MCP
-overhead on the same load. This example uses LongMemEval and requires
-`pip install -e ".[datasets,mcp]"`.
-
-```sh
-ltm100 run --config examples/memmachine-mcp.yaml \
-    --scenario chat-replay --users 20 --duration 30 --seed 0 \
-    --output out/mcp-chat
-```
-
-### Server-side search knobs (`--expand`, `--filter`; REST only)
-
-Forward `expand_context` and a metadata filter to every search so a run can
-match another harness's search behaviour. The filter needs the corpus to
-carry the field — the synthetic dataset writes `metadata.category` when its
-`categories` option is set (uncomment it in the config):
-
-```sh
-ltm100 run --config examples/synthetic.yaml \
-    --scenario search-load --users 20 --duration 30 --seed 0 \
-    --preingest --expand 2 --filter metadata.category=cat_3 \
-    --output out/filtered-search
-```
-
-### Scaling the client (`--procs`)
-
-One asyncio process saturates a single core; a fast server can leave the
-client as the bottleneck. Shard the users across N OS processes — the whole
-run's budgets are divided across the shards:
+For a chatbot-style workload using LongMemEval:
 
 ```sh
 ltm100 run --config examples/memmachine.yaml \
-    --scenario chat-replay --users 100 --duration 60 --seed 0 \
-    --procs 4 --output out/scaled
+    --scenario chat-replay --users 10 --duration 60 --seed 0 \
+    --output out/chat-replay
 ```
 
-### Common flags
+See the [running guide](docs/running.md) for configuration, workload commands,
+load controls, backend limitations, reports, and cleanup. The
+[example matrix](examples/README.md) shows the intended use of each YAML file.
 
-- `--duration SECONDS` or `--ops N`: how a run terminates (one is required).
-- `--users N`: number of virtual users.
-- `--seed N`: reproducible load shape (varies with N for variance runs).
-- `--model closed|open`: load model (see [Load models](docs/load-models.md)).
-- `--global-concurrency N`: cap total in-flight ops (0 = no cap).
-- `--arrival-rate F` / `--session-ops N` / `--queue-bound N`: open-model knobs.
-- `--procs N`: shard virtual users across N OS processes (default 1). One
-  asyncio process saturates a single core before a fast server does; raise
-  this when the client, not the server, is the bottleneck. Whole-run budgets
-  (ops, global-concurrency, arrival-rate, queue-bound) are divided across
-  shards; `--procs 1` is the original single-process topology.
-- `--expand N`: (search-load, mixed, chat-replay) server-side `expand_context`
-  — neighbouring episodes returned around each hit (default 0 = off, omitted
-  from the request). REST only.
-- `--filter EXPR`: (search-load, mixed, chat-replay) server-side metadata
-  filter, e.g. `metadata.category=cat_3`. Needs the corpus to carry that
-  field (synthetic's `categories` option writes it). REST only.
-- `--rampup SECONDS`: stagger user start to avoid a thundering herd.
-- `--search-weight F`: (mixed) fraction of ops that are search (0..1).
-- `--top-k N`: (search-load, mixed, chat-replay) memories returned per search
-  (default 20). Applied to all users.
-- `--think SECONDS`: (mixed, chat-replay) max think-time jitter per op.
-- `--search-every N`: (chat-replay) recall every N user turns (default 1).
-- `--answer-time SECONDS`: (chat-replay) mean LLM answer time after a user
-  turn (Exponential; 0 = back-to-back, default). All users.
-- `--user-gap SECONDS`: (chat-replay) mean user think/typing time before the
-  next turn (Exponential; 0 = back-to-back, default). All users.
-- `--preingest` / `--preingest-fraction F`: pre-fill memories before the run.
-- `--server-metrics`: scrape the server's Prometheus metrics before/after the
-  measured window and report per-phase latency deltas (`server_metrics.csv` +
-  a `server_metrics` section in `summary.json`). Requires an adapter that
-  implements the query (currently MemMachine REST); others warn and continue
-  without it. With `--procs > 1` the window becomes the whole run (see
-  Reports).
-- `--raw`: also write per-request `raw.ndjson`.
-- `--no-delete-on-exit`: keep per-user state after the run.
+## Workloads
 
-See `ltm100 run --help` for the complete list.
+| Scenario | Purpose | Dataset requirement |
+|---|---|---|
+| `chat-replay` | Replay chatbot recall and conversation ingestion | Structured `turn_stream` such as LongMemEval |
+| `add-load` | Measure pure memory-ingest throughput | Any dataset |
+| `search-load` | Measure search throughput and latency | Any dataset; pre-ingest recommended |
+| `mixed` | Generate a configurable add/search mixture | Any dataset; pre-ingest recommended |
 
-## Backend setup
+Every scenario runs under both load models:
 
-LTM100 talks to an LTM server through a pluggable **backend adapter**
-(`LTMClient` contract). The supported backends are **MemMachine** and
-**Mem0 OSS**:
+- `closed`: a fixed number of users repeatedly execute their plans.
+- `open`: sessions arrive through a Poisson process and exercise the bounded
+  queue and rejection policy.
 
-- **MemMachine (REST)** — `examples/memmachine.yaml`. Points `backend.base_url`
-  at the server (e.g. `http://localhost:8080`); `org_prefix` namespaces
-  per-user projects (`session_key = f"{org_prefix}/user_{UserId}"`); one
-  user = one MemMachine project, created on setup and deleted on teardown.
-- **MemMachine (MCP)** — `examples/memmachine-mcp.yaml`. Same workload via
-  `add_memory` / `search_memory` MCP tools. Lifecycle stays on REST (MCP has
-  no project-management tools). Note `add_memory` writes all memory types
-  (episodic + semantic), unlike the episodic-only REST add, so MCP add
-  latency is not directly comparable to REST add latency. The MCP tools
-  expose neither `expand_context`/`filter` nor item metadata, so the MCP
-  backend **refuses** `--expand`/`--filter` and metadata-bearing items
-  loudly — use the REST backend for those arms.
-- **Mem0 OSS (REST)** — `examples/mem0.yaml`. Maps each virtual user to a
-  namespaced Mem0 `user_id`; uses `POST /memories`, `POST /search`, and
-  `DELETE /memories`. The default `infer: false` stores each input as one
-  memory without LLM fact extraction, matching LTM100's item accounting and
-  the MemMachine episodic-only baseline. Set `infer: true` explicitly to
-  benchmark Mem0's extraction pipeline. Mem0 supports `--filter` but not
-  `--expand`.
+LongMemEval supports all four scenarios. The bundled synthetic dataset supports
+the three scenarios that do not require structured dialogue turns.
 
-Verify the server is up before a run (MemMachine: `GET /api/v2/health`).
-Further design details and how to add a new backend are described in
-[`DESIGN.md`](./DESIGN.md).
+## Adapters
 
-## Datasets
+Datasets:
 
-The baseline dialogue dataset is [LongMemEval](https://github.com/xiaowu0162/longmemeval).
-A **Synthetic** dataset is bundled for load testing.
+- **LongMemEval** — local JSON or Hugging Face loading, with structured
+  user/assistant turns for `chat-replay`.
+- **Synthetic** — deterministic, download-free data for load probes.
+
+Backends:
+
+- **MemMachine REST**
+- **MemMachine MCP** with REST lifecycle management
+- **Mem0 OSS REST**
+
+Backend-specific options and unsupported feature combinations are documented
+in the [running guide](docs/running.md).
 
 ## Reports
 
-With `--output DIR`, LTM100 writes:
+With `--output DIR`, a run writes `summary.json` and `summary.csv`. Use `--raw`
+for per-request `raw.ndjson`, and `--server-metrics` for backend-provided
+server latency breakdowns when the selected adapter supports them.
 
-- `summary.json` — aggregated metrics with offered, accepted, successful,
-  error, and rejected counts/rates. `throughput_ops_s` and `qps` are successful
-  throughput; latency percentiles (p50/p90/p95/p99/max) contain successful
-  requests only. Rejection rate is rejected/offered and error rate is backend
-  errors/accepted. `items.empty_rate` remains the fraction of successful
-  searches returning nothing (a 0% error rate alone cannot tell a working
-  search from a silent one). `meta` records the run config plus the server's
-  own build (`meta.build`, probed from `/api/v2/health`). For multi-process
-  runs these are the whole-run settings, not one shard's share; `started_at`
-  and `ended_at` bracket the complete run lifecycle.
-- `summary.csv` — the same summary as a flat table, with an overall `all` row
-  (throughput/qps only; latency cells blank since mixing add/search latencies is
-  ambiguous).
-- `server_metrics.csv` / `server_metrics_raw.json` (with `--server-metrics`) —
-  the server's own latency breakdown for the window: one row per phase/http
-  series (`delta_count`, `delta_sum_s`, `mean_s`, `p50_s`/`p90_s`/`p99_s`
-  interpolated inside the server's bucket edges, `note` for resets,
-  not-executed series, and beyond-buckets quantiles), plus the complete
-  before/after scrapes as parsed JSON (secondary component metrics — embedder,
-  vector store, segment store, ... — live only here). The same rows without
-  `raw` appear under `server_metrics` in `summary.json`. With `--procs 1` the
-  window is the measured window; with `--procs > 1` it is the whole run
-  (`window: "whole_run"`, pre-ingest included).
-- `raw.ndjson` (with `--raw`) — one line per request.
-
-## Cleanup per-user state
-
-Per-run state (e.g. MemMachine projects) is deleted on exit by default. To
-delete it without running a benchmark:
-
-```sh
-ltm100 cleanup --config examples/memmachine.yaml --users 50
-```
-
-> Note: MemMachine's `projects/list` is eventually consistent — an immediate
-> list after delete may still show the project before it disappears. The
-> delete itself is confirmed by the server's response.
+Successful throughput and latency are reported separately from backend errors
+and queue rejections, so overload cannot inflate QPS or lower service-latency
+percentiles. See [Reports](docs/running.md#reports) for the output contract.
 
 ## Documentation
 
-This README is a fast entry point. Detail lives under [`docs/`](./docs/) and
-[`DESIGN.md`](./DESIGN.md):
+- [Running guide](docs/running.md) — configuration, commands, flags, reports,
+  and cleanup.
+- [Scenario guide](docs/scenarios.md) — per-scenario data flow and behavior.
+- [Load models](docs/load-models.md) — closed/open scheduling and congestion.
+- [Example configurations](examples/README.md) — YAML selection guide.
+- [Design](DESIGN.md) — adapter contracts, lifecycle, metrics, and roadmap.
 
-- [`docs/scenarios.md`](./docs/scenarios.md) — per-scenario data flow: how a
-  virtual user behaves, concurrency, the `add`/`search` ops at the
-  backend-contract level, plus the scenario comparison table.
-- [`docs/load-models.md`](./docs/load-models.md) — the closed/open load
-  models, the congestion/rejection policy, and when to use which.
-- [`DESIGN.md`](./DESIGN.md) — full design: pluggable adapter contracts,
-  metrics, run lifecycle, reproducibility, project layout, roadmap.
-
-## Tests
+## Development
 
 ```sh
 pytest -q
+ruff check .
 ```
 
 ## Versioning
 
-Releases are marked with git tags (`vMAJOR.MINOR.PATCH`). The current release
-is **v0.4.1**. Tag a release at a stable, documented milestone:
+Releases use `vMAJOR.MINOR.PATCH` tags. During 0.x, a minor bump marks a
+meaningful tested milestone; breaking changes bump the minor version.
 
 ```sh
-git tag v0.4.1
-git push origin v0.4.1
+git tag v0.4.2
+git push origin v0.4.2
 ```
 
-During 0.x, each minor bump marks a meaningful, tested milestone (a coherent
-set of features verified against a live server). Breaking changes bump the
-minor version while still in 0.x.
+## License
+
+[Apache License 2.0](LICENSE)
