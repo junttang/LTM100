@@ -4,6 +4,12 @@
 # Pair it with a matched control - the same file with the two tenancy options
 # removed and a different org_prefix - or the result attributes to nothing.
 # See docs/scenarios.md, "Isolation scope".
+#
+# This synthetic config supports add-load, search-load, and mixed, not
+# chat-replay. Example search arm:
+#   ltm100 run --config examples/shared-project.yaml \
+#       --scenario search-load --users 20 --duration 30 --seed 0 \
+#       --preingest --preingest-fraction 1.0 --top-k 20
 
 dataset:
   name: synthetic

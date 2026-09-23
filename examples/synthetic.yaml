@@ -1,8 +1,14 @@
-# LTM100 example config: synthetic dataset + MemMachine REST backend.
+# Non-dialogue load probes: synthetic dataset + MemMachine REST backend.
 #
-# Fast load testing with no external data download. Run with:
+# Synthetic data supports add-load, search-load, and mixed. It does not expose
+# dialogue turns, so it cannot run chat-replay. Basic add throughput example:
 #   ltm100 run --config examples/synthetic.yaml \
-#       --scenario chat-replay --users 20 --duration 30 --seed 0
+#       --scenario add-load --users 20 --duration 30 --seed 0
+#
+# For search-load, pre-ingest the corpus before the measured run:
+#   ltm100 run --config examples/synthetic.yaml \
+#       --scenario search-load --users 20 --duration 30 --seed 0 \
+#       --preingest --preingest-fraction 1.0
 
 dataset:
   name: synthetic

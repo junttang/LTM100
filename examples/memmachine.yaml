@@ -1,16 +1,20 @@
-# LTM100 example config: LongMemEval dataset + MemMachine REST backend.
+# Chat replay: LongMemEval dataset + MemMachine REST backend.
 #
-# Copy and edit: fill in base_url. Run with:
+# LongMemEval provides the dialogue turn_stream required by chat-replay.
+# Install the dataset extra before using the default Hugging Face source:
+#   pip install -e ".[datasets]"
+#
+# Run with:
 #   ltm100 run --config examples/memmachine.yaml \
 #       --scenario chat-replay --users 50 --duration 60 --seed 0
 
 dataset:
   name: longmemeval
-  # Option A: load from a pre-downloaded local JSON file (no HF download).
-  path: ~/longmemeval/longmemeval_s_cleaned.json
-  # Option B (comment out `path`): download from HuggingFace instead.
+  # Default: download from Hugging Face. To use a local copy instead,
+  # uncomment path; when path is set, it takes precedence over split.
+  # path: ~/longmemeval/longmemeval_s_cleaned.json
   split: longmemeval_s_cleaned
-  length: 100            # cap number of dataset samples (and thus max unique users)
+  length: 100  # cap dataset samples (users may replicate samples above this)
 
 backend:
   name: memmachine
