@@ -134,9 +134,10 @@ class MemMachineMcpClient:
         # add_memory takes a single content string per call, so we issue one
         # tool call per memory item (the MCP tool has no batch form). The
         # tool returns a success McpResponse with no ids.
-        # The add_memory tool takes no metadata field, so carrying any here
-        # would drop it silently and then a metadata filter would select
-        # nothing for reasons invisible in the results.
+        # The add_memory tool takes neither metadata nor role. Metadata must
+        # fail because callers can request a metadata-filtered measurement;
+        # role is intentionally omitted so dialogue workloads remain usable
+        # over MCP, with the transport limitation documented explicitly.
         if any(item.metadata for item in items):
             raise ValueError(
                 "the MCP backend cannot store item metadata: add_memory has no "

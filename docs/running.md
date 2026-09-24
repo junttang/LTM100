@@ -162,7 +162,8 @@ Run `ltm100 run --help` for the complete and authoritative option list.
 
 [`examples/memmachine.yaml`](../examples/memmachine.yaml) maps each virtual
 user to a project under `org_prefix`. It uses episodic add/search operations
-and supports `--expand`, `--filter`, and `--server-metrics`.
+and supports `--expand`, `--filter`, and `--server-metrics`. Dialogue item
+roles are forwarded in `messages[].role`.
 
 The optional `project_id` and `filter_by_producer` settings support shared-
 project isolation experiments. See the isolation-scope section in
@@ -176,8 +177,10 @@ writes all memory types rather than the REST adapter's episodic-only payload,
 so REST and MCP add latency are not a transport-only comparison.
 
 The MCP tools expose neither context expansion nor metadata filtering and do
-not accept item metadata. The adapter rejects unsupported combinations rather
-than silently dropping them.
+not accept item metadata or role. Role is intentionally omitted so dialogue
+workloads remain runnable; use REST when stored speaker identity is required.
+The adapter rejects metadata/filter/expansion combinations rather than silently
+dropping settings that change the labeled measurement.
 
 ### Mem0 OSS REST
 
@@ -185,7 +188,7 @@ than silently dropping them.
 namespaced Mem0 `user_id`. Its default `infer: false` stores each input as one
 memory without LLM fact extraction, preserving LTM100's item accounting. Set
 `infer: true` to include Mem0's extraction pipeline. Mem0 supports `--filter`
-but not `--expand`.
+but not `--expand`; dialogue item roles are forwarded in each message.
 
 ## Reports
 

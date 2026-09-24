@@ -142,6 +142,20 @@ async def test_mcp_add_sends_tenant_args(server_url):
 
 
 @pytest.mark.asyncio
+async def test_mcp_add_accepts_role_but_tool_contract_omits_it(server_url):
+    client = MemMachineMcpClient(server_url, org_prefix="ltm100")
+    client._mcp = FakeMcpTransport()  # type: ignore[assignment]
+    async with client:
+        await client.add(
+            "alice",
+            [MemoryItem(content="hello", producer="alice", role="assistant")],
+        )
+
+    _, args = client._mcp.calls[0]
+    assert "role" not in args
+
+
+@pytest.mark.asyncio
 async def test_mcp_add_counts_sent_items(server_url):
     client = MemMachineMcpClient(server_url, org_prefix="ltm100")
     client._mcp = FakeMcpTransport()  # type: ignore[assignment]

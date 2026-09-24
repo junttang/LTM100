@@ -143,7 +143,9 @@ class DatasetAdapter(Protocol):
   not the dataset's own user count.
 - LongMemEval mapping: a sample's `haystack_sessions` → one user's
   `memory_stream` (flattened, chunked <=3000 chars) **and** `turn_stream`
-  (per-turn role + chunked items, for chat-replay).
+  (per-turn role + chunked items, for chat-replay). Both streams preserve the
+  source turn role on every `MemoryItem`; `chat-replay` also fills a missing
+  item role from its enclosing `Turn.role`.
 
 ### 4.2 LTMClient (backend adapter)
 
@@ -533,9 +535,10 @@ Resolved during implementation:
   MCP adapter imports lazily (`config._mcp_backend`) so a plain install
   without the `[mcp]` extra can still print `--help`; the extra is required
   only when an MCP backend is selected. The MCP `add_memory` tool has no
-  metadata field, so the adapter **refuses** items carrying metadata (a
-  metadata `--filter` would otherwise select nothing for invisible
-  reasons); and `search_memory` exposes neither `expand_context` nor
+  metadata or role field, so the adapter **refuses** items carrying metadata
+  (a metadata `--filter` would otherwise select nothing for invisible
+  reasons) and intentionally omits role so dialogue workloads remain
+  runnable; `search_memory` exposes neither `expand_context` nor
   `filter`, so the adapter **refuses** those knobs rather than silently
   running a baseline search under their label.
 - **chat-replay LLM timing**: `chat-replay` models the LLM answer time

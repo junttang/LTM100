@@ -388,6 +388,10 @@ class ChatReplay:
                         )
                     user_turn_idx += 1
                 for item in turn.items:
+                    # Turn.role is the dialogue-level source of truth. Preserve
+                    # an explicitly supplied item role, but fill it when a
+                    # dataset only annotates the enclosing turn.
+                    item = item if item.role else replace(item, role=turn.role)
                     turn_ops.append(
                         Op(
                             type=OpType.ADD,

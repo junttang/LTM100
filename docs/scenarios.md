@@ -200,8 +200,10 @@ interleaves them.
 **Concurrency:** per-user in-flight 1; the conversation is replayed in order.
 
 **add:** one item per chunk of each turn's content, `delay = uniform(0,
-think)` (default 0.05). Both user and assistant turns are added identically
-(episodic, `producer` = user id).
+think)` (default 0.05). Each item preserves the enclosing turn's `user` or
+`assistant` role and uses the virtual user id as `producer`. A dialogue adapter
+that supplies only `Turn.role` is filled in by `chat-replay`; an explicit
+per-item role is preserved.
 **search:** one per recall-firing user turn, `query` = that turn's first
 chunk's content, `top_k` from `--top-k` (default 20), plus the optional
 `expand_context`/`filter` from `--expand`/`--filter`, `delay = uniform(0, think)`.
@@ -568,8 +570,11 @@ comparing the two transports:
   `content.episodic_memory.long_term_memory.episodes` shape the REST search
   endpoint uses, so results parse identically.
 
-**Knobs the MCP tools cannot honour.** `add_memory` has no metadata field,
-and `search_memory` exposes neither `expand_context` nor `filter`. Rather
+**Fields and knobs the MCP tools cannot honour.** `add_memory` has no metadata
+or role field, and `search_memory` exposes neither `expand_context` nor
+`filter`. Role is therefore intentionally omitted on MCP adds while the
+dialogue workload continues to run; use REST when stored speaker identity is
+part of the workload. Rather
 than silently dropping metadata or running a baseline search under the label
 of a filtered/expanded one (which would make the error rate lie), the MCP
 adapter **raises** for `--expand`/`--filter` and for items carrying metadata
@@ -590,7 +595,8 @@ the scoped `user_id`, optional metadata, and `infer`. `infer` defaults to
 false, preserving one-input/one-memory accounting and avoiding LLM fact
 extraction in comparisons with MemMachine's episodic-only path. With
 `infer: true`, one input may produce zero, one, or several memories and add
-latency includes the extraction pipeline.
+latency includes the extraction pipeline. The message's role is forwarded,
+defaulting to `user` only when the item has no role.
 
 **search** sends `POST /search` with `query`, `top_k`, and a `filters` object
 containing the scoped `user_id`. LTM100's exact-match

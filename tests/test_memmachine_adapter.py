@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from aiohttp import web
 
-from ltm100.adapters.backends.memmachine import MemMachineClient
+from ltm100.adapters.backends.memmachine import MemMachineClient, _to_message
 from ltm100.common import MemoryItem, QueryItem
 
 
@@ -117,6 +117,16 @@ async def test_add_returns_uids_per_item(server_url):
         uids = await client.add("u0", items)
         assert len(uids) == 5
         assert all(isinstance(u, str) and u for u in uids)
+
+
+def test_add_message_preserves_role():
+    assert _to_message(
+        MemoryItem(content="answer", producer="u0", role="assistant")
+    ) == {
+        "content": "answer",
+        "producer": "u0",
+        "role": "assistant",
+    }
 
 
 @pytest.mark.asyncio
