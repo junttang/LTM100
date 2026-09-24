@@ -22,10 +22,24 @@ def _synthetic_records(n: int = 3) -> list[dict]:
                 "question_id": f"q{i}",
                 "haystack_sessions": [
                     [
-                        {"content": f"hello world {i} " * 300, "has_answer": True},
-                        {"content": f"second turn {i}", "has_answer": False},
+                        {
+                            "role": "user",
+                            "content": f"hello world {i} " * 300,
+                            "has_answer": True,
+                        },
+                        {
+                            "role": "assistant",
+                            "content": f"second turn {i}",
+                            "has_answer": False,
+                        },
                     ],
-                    [{"content": f"another session {i}", "has_answer": False}],
+                    [
+                        {
+                            "role": "user",
+                            "content": f"another session {i}",
+                            "has_answer": False,
+                        }
+                    ],
                 ],
             }
         )
@@ -60,6 +74,32 @@ def test_memory_stream_yields_chunked_items():
     assert len(items) >= 2  # multiple turns across sessions
     assert all(it.content.strip() for it in items)
     assert all(it.producer == users[0] for it in items)
+    assert {it.role for it in items} == {"user", "assistant"}
+    assistant = next(it for it in items if it.content.startswith("second turn"))
+    assert assistant.role == "assistant"
+
+
+def test_turn_stream_propagates_turn_role_to_every_chunk():
+    adapter = _make_adapter(_synthetic_records(1))
+    user = adapter.users(1, seed=0)[0]
+
+    turns = list(adapter.turn_stream(user))
+
+    assert [turn.role for turn in turns] == ["user", "assistant", "user"]
+    assert all(item.role == turn.role for turn in turns for item in turn.items)
+    assert len(turns[0].items) > 1
+
+
+def test_missing_source_role_defaults_to_user():
+    records = _synthetic_records(1)
+    records[0]["haystack_sessions"][0][0].pop("role")
+    adapter = _make_adapter(records)
+    user = adapter.users(1, seed=0)[0]
+
+    first_turn = next(adapter.turn_stream(user))
+
+    assert first_turn.role == "user"
+    assert all(item.role == "user" for item in first_turn.items)
 
 
 def test_memory_stream_chunks_long_content():

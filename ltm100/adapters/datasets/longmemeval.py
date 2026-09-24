@@ -79,13 +79,18 @@ def _split_chunks(text: str, max_chars: int = 3000) -> list[str]:
 
 def _collect_turn_contents(sample: dict[str, Any]) -> list[str]:
     """Flatten a sample's haystack_sessions into chunked turn contents."""
-    turns: list[str] = []
+    return [content for _, contents in _iter_turns(sample) for content in contents]
+
+
+def _iter_turns(sample: dict[str, Any]) -> Iterator[tuple[str, list[str]]]:
+    """Yield each non-empty haystack turn's role and chunked contents."""
     for session in sample.get("haystack_sessions", []) or []:
         for turn in session or []:
+            role = str(turn.get("role", "")).strip() or "user"
             content = str(turn.get("content", "")).strip()
-            if content:
-                turns.extend(_split_chunks(content))
-    return turns
+            chunks = _split_chunks(content)
+            if chunks:
+                yield role, chunks
 
 
 class LongMemEvalAdapter:
@@ -262,8 +267,9 @@ class LongMemEvalAdapter:
 
     def memory_stream(self, user: UserId) -> Iterator[MemoryItem]:
         sample = self._sample_for_user(user)
-        for content in _collect_turn_contents(sample):
-            yield MemoryItem(content=content, producer=user)
+        for role, chunks in _iter_turns(sample):
+            for content in chunks:
+                yield MemoryItem(content=content, producer=user, role=role)
 
     def turn_stream(self, user: UserId) -> Iterator[Turn]:
         """Yield haystack turns as (role, chunked items), in conversation order.
@@ -274,17 +280,12 @@ class LongMemEvalAdapter:
         user and following assistant turns. Long content is chunked the same
         way as in `memory_stream` (<=3000 chars on word boundaries)."""
         sample = self._sample_for_user(user)
-        for session in sample.get("haystack_sessions", []) or []:
-            for turn in session or []:
-                role = str(turn.get("role", "")).strip() or "user"
-                content = str(turn.get("content", "")).strip()
-                if not content:
-                    continue
-                chunks = _split_chunks(content)
-                if not chunks:
-                    continue
-                items = [MemoryItem(content=c, producer=user) for c in chunks]
-                yield Turn(role=role, items=items)
+        for role, chunks in _iter_turns(sample):
+            items = [
+                MemoryItem(content=content, producer=user, role=role)
+                for content in chunks
+            ]
+            yield Turn(role=role, items=items)
 
 
 __all__ = ["LongMemEvalAdapter", "_collect_turn_contents", "_split_chunks"]

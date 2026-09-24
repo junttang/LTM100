@@ -110,6 +110,36 @@ async def test_chat_replay_search_query_is_user_turn_content():
     assert seen_queries == ["u0 user turn 0", "u0 user turn 1", "u0 user turn 2"]
 
 
+def test_chat_replay_fills_missing_item_roles_from_turns():
+    plan = ChatReplay(think=0.0).plan("u0", DialogueDataset(), {"seed": 0})
+
+    ops = [next(plan) for _ in range(3)]
+
+    assert ops[1].items[0].role == "user"
+    assert ops[2].items[0].role == "assistant"
+
+
+def test_chat_replay_preserves_explicit_item_role():
+    class ExplicitRoleDataset(DialogueDataset):
+        def turn_stream(self, user: UserId):
+            yield Turn(
+                role="user",
+                items=[
+                    MemoryItem(
+                        content=f"{user} tool result",
+                        producer=user,
+                        role="tool",
+                    )
+                ],
+            )
+
+    plan = ChatReplay(think=0.0).plan("u0", ExplicitRoleDataset(), {"seed": 0})
+
+    next(plan)  # search before the user turn
+    add = next(plan)
+    assert add.items[0].role == "tool"
+
+
 @pytest.mark.asyncio
 async def test_chat_replay_count_terminates_at_ops():
     """One pass of the dialogue is 3 turn-pairs = 9 ops; with ops=9 the run
