@@ -362,10 +362,10 @@ the run, and every histogram reported as the difference.
   warning rather than averaged into a wrong number. `Δcount == 0` reads
   "not executed"; a quantile landing in the `+Inf` bucket reads "beyond
   buckets" rather than being extrapolated.
-- **The window is the measured window** (pre-ingest and teardown excluded) via
-  runner measure-hooks. With `--procs > 1` the parent cannot see inside the
-  shards' loops, so its snapshots bracket the whole run and the section says
-  `window: "whole_run"`.
+- **The window is the measured window** (pre-ingest, warm-up, and teardown
+  excluded) via runner measure-hooks. With `--procs > 1`, every worker waits
+  at start/end measurement boundaries while the parent takes the snapshots,
+  so the server and pooled client results cover the same interval.
 - **What is reported**: MemMachine's five add-pipeline phases
   (segmentation, derivation, embedding, segment_store, vector_store), four
   search phases (embedding, vector_query, segment_query, scoring), and the two
@@ -389,17 +389,21 @@ the run, and every histogram reported as the difference.
 1. **Load config** (YAML) — backend endpoint/auth, transport, adapter choices.
 2. **Resolve adapters** — dataset + LTM client (+ transport).
 3. **Provision** (`LTMClient.setup`) — per-user tenants created. (out of measure)
-4. **Optional warm-up / pre-ingest** — fill each user's memories (a fraction
-   of `memory_stream`) before the measured run; excluded from metrics. Enabled
-   with `--preingest` and `--preingest-fraction`; applied under the global
+4. **Optional pre-ingest** — fill each user's memories (a fraction of
+   `memory_stream`) before the workload; excluded from metrics. Enabled with
+   `--preingest` and `--preingest-fraction`; applied under the global
    concurrency cap. A zero fraction is a no-op, and any ingestion failure
-   aborts the run before measurement.
-5. **Measured run** — scenario drives users; MetricsRecorder collects.
-6. **Drain** — in-flight requests complete (or timeout).
-7. **Teardown** (`LTMClient.teardown`, `delete=True`) — optional per run;
+   aborts the run before warm-up or measurement.
+5. **Optional warm-up** — drive the selected workload for `--warmup` seconds
+   against the real backend. Requests can update backend state but are not
+   recorded and do not consume the measured duration or operation budget.
+   In-flight warm-up work drains before measurement starts.
+6. **Measured run** — scenario drives users; MetricsRecorder collects.
+7. **Drain** — in-flight requests complete (or timeout).
+8. **Teardown** (`LTMClient.teardown`, `delete=True`) — optional per run;
    also exposed as a standalone cleanup command.
-8. **Aggregate & report** — summary JSON/CSV + optional raw NDJSON + optional
-   server-metrics section (§7.3), whose snapshots are taken inside step 5's
+9. **Aggregate & report** — summary JSON/CSV + optional raw NDJSON + optional
+   server-metrics section (§7.3), whose snapshots are taken inside step 6's
    boundaries when `--server-metrics` is on.
 
 Termination: count-based (total K ops) **or** time-based (T seconds). Ramp-up
@@ -565,8 +569,6 @@ Still open / next work (priority order):
    design. Synergy with Mem0.
 4. **Additional datasets** (BEAM, LoCoMo) via the `DatasetAdapter` extension
    (must implement `memory_stream`, and `turn_stream` if dialogue).
-5. **Ramp-up / warm-up steady-state filtering** — the `warmup` field exists;
-   verify steady-state metric exclusion at scale.
 
 ## 14. Glossary
 

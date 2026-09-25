@@ -61,6 +61,7 @@ class LoadRunner:
         self._ops_done = 0
         self._ops_lock = asyncio.Lock()
         self._start_time = 0.0
+        self._record_results = True
 
     async def run(self) -> list[OpResult]:
         users = self.shard_users(
@@ -85,30 +86,51 @@ class LoadRunner:
         if self.config.preingest:
             await self._preingest(users)
 
+        # Warm-up drives the real workload against the real backend but does
+        # not consume the measured duration/op budget and is never recorded.
+        # Running it as a separate phase also drains in-flight work before the
+        # measurement hooks fire, so client and server-side metric windows
+        # share an exact boundary.
+        if self.config.warmup > 0:
+            self._record_results = False
+            await self._run_workload(duration=self.config.warmup)
+            self._reset_phase_state()
+
         # Optional observation hooks bracketing the measured window (e.g. the
         # CLI's server-metrics snapshots). Excluded: setup and pre-ingest
-        # before, teardown after (teardown lives in the caller). A hook
-        # failure is logged and swallowed -- observation never cancels the
-        # benchmark it observes.
+        # before, warm-up before, and teardown after (teardown lives in the
+        # caller). A hook failure is logged and swallowed -- observation never
+        # cancels the benchmark it observes.
         await self._call_hook(self.on_measure_start, "on_measure_start")
 
-        self._start_time = time.monotonic()
-        # deadline is None for pure count-based closed runs (no time bound); the
-        # open model always has a duration (validated in RunConfig).
-        deadline = (
-            self._start_time + self.config.duration
-            if self.config.duration > 0
-            else None
-        )
-
-        if self.config.model == "open":
-            assert deadline is not None  # validated by RunConfig
-            await self._open_loop(users, deadline)
-        else:
-            await self._closed_loop(users, deadline)
+        self._record_results = True
+        await self._run_workload(duration=self.config.duration)
 
         await self._call_hook(self.on_measure_end, "on_measure_end")
         return self.recorder.raw()
+
+    async def _run_workload(self, *, duration: float) -> None:
+        """Run one workload phase.
+
+        ``duration`` is always positive for warm-up. For the measured phase it
+        may be zero when an exact operation count is the termination condition.
+        """
+        self._start_time = time.monotonic()
+        # deadline is None for pure count-based closed runs (no time bound); the
+        # open model always has a duration (validated in RunConfig).
+        deadline = self._start_time + duration if duration > 0 else None
+
+        if self.config.model == "open":
+            assert deadline is not None  # validated by RunConfig
+            await self._open_loop(self.users, deadline)
+        else:
+            await self._closed_loop(self.users, deadline)
+
+    def _reset_phase_state(self) -> None:
+        """Reset termination state after warm-up, leaving backend state intact."""
+        self._stop = asyncio.Event()
+        self._ops_done = 0
+        self._admitted = 0
 
     async def _call_hook(
         self, hook: Callable[[], Awaitable[None]] | None, what: str
@@ -129,7 +151,9 @@ class LoadRunner:
             return users
         return users[self.config.proc_index :: self.config.procs]
 
-    async def _closed_loop(self, users: list[UserId], deadline: float) -> None:
+    async def _closed_loop(
+        self, users: list[UserId], deadline: float | None
+    ) -> None:
         tasks = []
         for i, user in enumerate(users):
             # Staggered start for ramp-up: user i starts at i*ramp_step.
@@ -138,7 +162,7 @@ class LoadRunner:
                 asyncio.create_task(self._user_loop(user, start_delay, deadline))
             )
         if deadline is not None:
-            asyncio.create_task(self._timer(deadline))
+            asyncio.create_task(self._timer(deadline, self._stop))
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _open_loop(self, users: list[UserId], deadline: float) -> None:
@@ -156,7 +180,7 @@ class LoadRunner:
 
         # Always run the timer to honor the deadline even if all sessions are
         # short; the arrival generator stops at the deadline.
-        asyncio.create_task(self._timer(deadline))
+        asyncio.create_task(self._timer(deadline, self._stop))
 
         t = self._start_time
         while not self._should_stop():
@@ -250,7 +274,8 @@ class LoadRunner:
             error_kind="queue_full",
             n_items=0,
         )
-        await self.recorder.record(result)
+        if self._record_results:
+            await self.recorder.record(result)
 
     def _release_slot(self) -> None:
         if self._global_sem is not None:
@@ -303,10 +328,10 @@ class LoadRunner:
         step = self.config.rampup / total
         return step * index
 
-    async def _timer(self, deadline: float) -> None:
+    async def _timer(self, deadline: float, stop: asyncio.Event) -> None:
         while time.monotonic() < deadline:
             await asyncio.sleep(0.05)
-        self._stop.set()
+        stop.set()
 
     def _should_stop(self) -> bool:
         return self._stop.is_set()
@@ -316,7 +341,7 @@ class LoadRunner:
 
         A successful reservation is a promise to run the op, so count-based
         termination records exactly `ops` results."""
-        if self.config.ops <= 0:
+        if not self._record_results or self.config.ops <= 0:
             return True
         async with self._ops_lock:
             if self._ops_done >= self.config.ops:
@@ -393,7 +418,8 @@ class LoadRunner:
             error_kind=error_kind,
             n_items=n_items,
         )
-        await self.recorder.record(result)
+        if self._record_results:
+            await self.recorder.record(result)
 
 
 __all__ = ["LoadRunner"]
