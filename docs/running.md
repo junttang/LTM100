@@ -132,7 +132,10 @@ ltm100 run --config examples/memmachine.yaml \
 
 ## Common flags
 
-- `--duration SECONDS` or `--ops N`: termination condition; one is required.
+- `--duration SECONDS` or `--ops N`: measured termination condition; one is
+  required.
+- `--warmup SECONDS`: run the workload before measurement without consuming
+  the measured duration/op budget or recording its requests.
 - `--users N`: virtual-user or tenant pool size.
 - `--seed N`: reproducible load-shape seed.
 - `--model closed|open`: scheduling model.
@@ -206,9 +209,12 @@ With `--output DIR`, LTM100 writes:
   deltas when `--server-metrics` is enabled and supported by the adapter.
 
 `meta` records the whole-run configuration, server build, and timestamps that
-bracket the complete run lifecycle. With one process, server metrics bracket
-the measured window. With multiple processes, the parent brackets the whole
-run and reports `window: "whole_run"`, which includes setup and pre-ingest.
+bracket the complete run lifecycle. `--warmup N` runs the selected workload
+for N seconds before measurement; those requests update backend state but do
+not consume `--duration`/`--ops` or appear in summaries and raw output. Server
+metrics bracket the same measured window. With multiple processes, workers
+synchronize after warm-up so the parent snapshots the server only after every
+shard is ready, and again before any shard begins teardown.
 
 Server-side resource utilization such as CPU, memory, storage, and network is
 outside LTM100's client report and should be collected from the system under

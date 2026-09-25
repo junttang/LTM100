@@ -112,7 +112,27 @@ async def _run_shard_async(args: argparse.Namespace) -> list:
     scenario = _build_scenario(args)
 
     hooks: dict[str, Any] = {}
-    if _server_metrics_collector is not None:
+    measure_sync = getattr(args, "_measure_sync", None)
+    if measure_sync is not None:
+        async def synchronized_start() -> None:
+            await asyncio.to_thread(
+                measure_sync["queue"].put,
+                ("start", args.proc_index, ""),
+            )
+            await asyncio.to_thread(measure_sync["start_release"].wait)
+
+        async def synchronized_end() -> None:
+            await asyncio.to_thread(
+                measure_sync["queue"].put,
+                ("end", args.proc_index, ""),
+            )
+            await asyncio.to_thread(measure_sync["end_release"].wait)
+
+        hooks = {
+            "on_measure_start": synchronized_start,
+            "on_measure_end": synchronized_end,
+        }
+    elif _server_metrics_collector is not None:
         # procs == 1 only (see the module-level note): this shard is the
         # process the flag was set in, so its measured window is exactly the
         # window the user asked about -- pre-ingest and teardown excluded.
@@ -141,7 +161,17 @@ def _shard_entry(args_dict: dict, proc_index: int) -> list:
     args.proc_index = proc_index
     if proc_index > 0:
         logging.basicConfig(level=logging.WARNING)
-    return asyncio.run(_run_shard_async(args))
+    try:
+        return asyncio.run(_run_shard_async(args))
+    except BaseException as error:
+        measure_sync = getattr(args, "_measure_sync", None)
+        if measure_sync is not None:
+            measure_sync["queue"].put(
+                ("error", proc_index, f"{type(error).__name__}: {error}")
+            )
+            measure_sync["start_release"].set()
+            measure_sync["end_release"].set()
+        raise
 
 
 def _backend_build(cfg) -> dict:
@@ -327,30 +357,39 @@ def _run(args: argparse.Namespace) -> int:
             # hooks bracket the measured window exactly.
             collector = SnapshotCollector(build_backend(cfg.backend))
         else:
-            logger.warning(
-                "--server-metrics with --procs %d: the parent cannot see inside "
-                "the shards' measured windows, so the snapshots bracket the "
-                "whole run including setup and pre-ingest (window=whole_run)",
-                run_cfg.procs,
-            )
             collector = SnapshotCollector(build_backend(cfg.backend))
 
     global _server_metrics_collector
-    _server_metrics_collector = collector
+    _server_metrics_collector = collector if run_cfg.procs == 1 else None
     try:
-        if collector is not None and run_cfg.procs > 1:
-            asyncio.run(collector.start())
         started_at = datetime.now(timezone.utc)
-        raw = run_shards(_shard_entry, vars(args), run_cfg.procs)
+        synchronize_workers = run_cfg.procs > 1 and (
+            collector is not None or run_cfg.warmup > 0
+        )
+        if synchronize_workers:
+            raw = run_shards(
+                _shard_entry,
+                vars(args),
+                run_cfg.procs,
+                on_measure_start=(
+                    (lambda: asyncio.run(collector.start()))
+                    if collector is not None
+                    else (lambda: None)
+                ),
+                on_measure_end=(
+                    (lambda: asyncio.run(collector.end()))
+                    if collector is not None
+                    else (lambda: None)
+                ),
+            )
+        else:
+            raw = run_shards(_shard_entry, vars(args), run_cfg.procs)
         ended_at = datetime.now(timezone.utc)
-        if collector is not None and run_cfg.procs > 1:
-            asyncio.run(collector.end())
     finally:
         _server_metrics_collector = None
 
     if collector is not None:
-        window = "measured" if run_cfg.procs == 1 else "whole_run"
-        server_metrics = finish(collector.result(), window=window)
+        server_metrics = finish(collector.result(), window="measured")
 
     summary = aggregate(raw)
 
@@ -412,10 +451,19 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", parents=[common], help="run a benchmark")
     run.add_argument("--scenario", required=True, help="scenario name")
     g = run.add_mutually_exclusive_group()
-    g.add_argument("--duration", type=float, default=0.0, help="run seconds (0=off)")
-    g.add_argument("--ops", type=int, default=0, help="total ops cap (0=off)")
+    g.add_argument(
+        "--duration", type=float, default=0.0, help="measured run seconds (0=off)"
+    )
+    g.add_argument(
+        "--ops", type=int, default=0, help="measured total ops cap (0=off)"
+    )
     run.add_argument("--global-concurrency", type=int, default=0, help="max in-flight")
-    run.add_argument("--warmup", type=float, default=0.0, help="warmup seconds")
+    run.add_argument(
+        "--warmup",
+        type=float,
+        default=0.0,
+        help="unmeasured workload seconds before the measured run",
+    )
     run.add_argument("--preingest", action="store_true", help="pre-ingest memories before run")
     run.add_argument(
         "--preingest-fraction",

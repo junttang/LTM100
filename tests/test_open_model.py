@@ -8,6 +8,7 @@ overload, recorded as status='rejected'.
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -73,14 +74,39 @@ async def test_open_model_runs_within_duration():
     )
     scenario = Mixed(search_weight=0.5, think=0.0)
     runner = LoadRunner(client=backend, dataset=ds, scenario=scenario, config=cfg)
-    import time
-
     t0 = time.monotonic()
     await runner.run()
     elapsed = time.monotonic() - t0
     assert elapsed < 4.0  # roughly bounded by duration + drain
     summary = runner.recorder.summary()
     assert summary["total"] > 0
+
+
+@pytest.mark.asyncio
+async def test_open_model_warmup_is_unmeasured_and_precedes_full_duration():
+    backend = SlowBackend(delay=0.005)
+    runner = LoadRunner(
+        client=backend,
+        dataset=FakeDataset(n_memories=5),
+        scenario=Mixed(search_weight=0.5, think=0.0),
+        config=RunConfig(
+            users=2,
+            duration=0.2,
+            warmup=0.2,
+            seed=0,
+            model="open",
+            arrival_rate=100.0,
+            session_ops=2,
+        ),
+    )
+    started = time.monotonic()
+
+    results = await runner.run()
+    elapsed = time.monotonic() - started
+
+    assert elapsed >= 0.35
+    assert results
+    assert backend.calls > len(results)
 
 
 @pytest.mark.asyncio

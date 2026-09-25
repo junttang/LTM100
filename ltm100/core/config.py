@@ -22,7 +22,8 @@ class RunConfig:
     ops: int = 0
     # Global concurrency cap (0 = no cap, only per-user in-flight=1 applies).
     global_concurrency: int = 0
-    # Warm-up seconds excluded from metrics (results recorded but filtered out).
+    # Warm-up seconds run before measurement. Requests execute against the
+    # backend but do not consume duration/ops or enter reports.
     warmup: float = 0.0
     # Pre-ingest each user's memory stream before the measured run so search
     # scenarios run against populated memory. Excluded from metrics.
@@ -58,6 +59,8 @@ class RunConfig:
     def __post_init__(self) -> None:
         if self.duration <= 0 and self.ops <= 0:
             raise ValueError("either duration or ops must be > 0")
+        if self.warmup < 0:
+            raise ValueError("warmup must be >= 0")
         if self.users <= 0:
             raise ValueError("users must be > 0")
         if self.procs < 1:

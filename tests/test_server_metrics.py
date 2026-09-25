@@ -9,6 +9,7 @@ use.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 
@@ -355,6 +356,44 @@ async def test_measure_hooks_bracket_the_measured_window():
 
 
 @pytest.mark.asyncio
+async def test_warmup_finishes_before_measure_start_hook():
+    _HookBackend.order.clear()
+
+    class SlowHookBackend(_HookBackend):
+        async def add(self, user, items):
+            await asyncio.sleep(0.005)
+            return await super().add(user, items)
+
+    async def start():
+        _HookBackend.order.append("start")
+
+    async def end():
+        _HookBackend.order.append("end")
+
+    runner = LoadRunner(
+        client=SlowHookBackend(),
+        dataset=_HookDataset(),
+        scenario=AddLoad(),
+        config=RunConfig(users=1, ops=3, warmup=0.03),
+        on_measure_start=start,
+        on_measure_end=end,
+    )
+
+    results = await runner.run()
+    start_index = _HookBackend.order.index("start")
+
+    assert start_index > 0
+    assert _HookBackend.order[start_index:] == [
+        "start",
+        "add",
+        "add",
+        "add",
+        "end",
+    ]
+    assert len(results) == 3
+
+
+@pytest.mark.asyncio
 async def test_failing_hook_does_not_break_the_run():
     async def start():
         raise RuntimeError("metrics endpoint died")
@@ -510,3 +549,85 @@ def test_cli_parses_server_metrics_flag():
         ["run", "--config", "x.yaml", "--scenario", "add-load", "--ops", "5"]
     )
     assert args.server_metrics is False
+
+
+def test_multiprocess_server_metrics_use_synchronized_measured_window(
+    tmp_path, monkeypatch, capsys
+):
+    import yaml
+
+    from ltm100 import cli
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                "dataset": {"name": "synthetic"},
+                "backend": {
+                    "name": "memmachine",
+                    "base_url": "http://localhost:8080",
+                },
+            }
+        )
+    )
+    events: list[str] = []
+
+    class FakeCollector:
+        def __init__(self, backend):
+            pass
+
+        async def start(self):
+            events.append("snapshot-start")
+
+        async def end(self):
+            events.append("snapshot-end")
+
+        def result(self):
+            return {"before": "up 1", "after": "up 1", "errors": []}
+
+    def fake_run_shards(entry, args, procs, **kwargs):
+        assert procs == 2
+        kwargs["on_measure_start"]()
+        events.append("measured-work")
+        kwargs["on_measure_end"]()
+        return []
+
+    monkeypatch.setattr(cli, "_backend_build", lambda cfg: {})
+    monkeypatch.setattr(cli, "_probe_server_metrics", lambda cfg: {"enabled": True})
+    monkeypatch.setattr(cli, "SnapshotCollector", FakeCollector)
+    monkeypatch.setattr(cli, "run_shards", fake_run_shards)
+    monkeypatch.setattr(
+        cli,
+        "finish",
+        lambda result, *, window: {
+            "enabled": True,
+            "status": "ok",
+            "window": window,
+            "warnings": [],
+            "rows": [],
+            "raw": {},
+        },
+    )
+    args = cli.build_parser().parse_args(
+        [
+            "run",
+            "--config",
+            str(cfg_path),
+            "--scenario",
+            "add-load",
+            "--users",
+            "2",
+            "--ops",
+            "4",
+            "--procs",
+            "2",
+            "--warmup",
+            "1",
+            "--server-metrics",
+        ]
+    )
+
+    assert cli._run(args) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert events == ["snapshot-start", "measured-work", "snapshot-end"]
+    assert payload["server_metrics"]["window"] == "measured"

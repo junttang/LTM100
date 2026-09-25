@@ -8,6 +8,7 @@ type, error handling, global concurrency cap, and metric recording.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -213,6 +214,59 @@ def test_config_requires_termination():
         RunConfig(users=1)
     with pytest.raises(ValueError):
         RunConfig(users=0, ops=1)
+    with pytest.raises(ValueError, match="warmup must be >= 0"):
+        RunConfig(users=1, ops=1, warmup=-1)
+
+
+@pytest.mark.asyncio
+async def test_warmup_executes_but_does_not_consume_count_budget_or_results():
+    class SlowBackend(FakeBackend):
+        async def add(self, user, items):
+            await asyncio.sleep(0.005)
+            return await super().add(user, items)
+
+    backend = SlowBackend()
+    runner = LoadRunner(
+        client=backend,
+        dataset=FakeDataset(n_memories=5),
+        scenario=AddLoad(),
+        config=RunConfig(users=1, ops=4, warmup=0.03),
+    )
+
+    results = await runner.run()
+
+    assert len(results) == 4
+    assert len(backend.adds) > len(results)
+    assert runner.recorder.summary()["total"] == 4
+
+
+@pytest.mark.asyncio
+async def test_duration_starts_after_warmup_and_only_measured_ops_are_returned():
+    class TimestampBackend(FakeBackend):
+        def __init__(self):
+            super().__init__()
+            self.call_times: list[float] = []
+
+        async def search(self, user, query):
+            self.call_times.append(time.monotonic())
+            await asyncio.sleep(0.005)
+            return await super().search(user, query)
+
+    backend = TimestampBackend()
+    runner = LoadRunner(
+        client=backend,
+        dataset=FakeDataset(n_memories=10),
+        scenario=SearchLoad(),
+        config=RunConfig(users=1, duration=0.06, warmup=0.06),
+    )
+    before = time.monotonic()
+
+    results = await runner.run()
+    elapsed = time.monotonic() - before
+
+    assert elapsed >= 0.1
+    assert results
+    assert len(backend.call_times) > len(results)
 
 
 @pytest.mark.asyncio
