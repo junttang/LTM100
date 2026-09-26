@@ -65,7 +65,9 @@ class LoadRunner:
 
     async def run(self) -> list[OpResult]:
         users = self.shard_users(
-            self.dataset.users(self.config.users, seed=self.config.seed)
+            self._configure_users(
+                self.dataset.users(self.config.users, seed=self.config.seed)
+            )
         )
         self.users = users
 
@@ -108,6 +110,13 @@ class LoadRunner:
 
         await self._call_hook(self.on_measure_end, "on_measure_end")
         return self.recorder.raw()
+
+    def _configure_users(self, users: list[UserId]) -> list[UserId]:
+        """Resolve whole-run scenario state before process-local sharding."""
+        configure = getattr(self.scenario, "configure_users", None)
+        if configure is not None:
+            configure(users, seed=self.config.seed)
+        return users
 
     async def _run_workload(self, *, duration: float) -> None:
         """Run one workload phase.
@@ -273,6 +282,7 @@ class LoadRunner:
             status="rejected",
             error_kind="queue_full",
             n_items=0,
+            group=op.group,
         )
         if self._record_results:
             await self.recorder.record(result)
@@ -417,6 +427,7 @@ class LoadRunner:
             status=status,
             error_kind=error_kind,
             n_items=n_items,
+            group=op.group,
         )
         if self._record_results:
             await self.recorder.record(result)

@@ -201,6 +201,8 @@ def write_raw_ndjson(results: list[OpResult], path: str | Path) -> None:
                 "error_kind": r.error_kind,
                 "n_items": r.n_items,
             }
+            if r.group:
+                row["group"] = r.group
             f.write(json.dumps(row) + "\n")
 
 

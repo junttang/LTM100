@@ -37,6 +37,7 @@ from typing import Any
 from weakref import WeakKeyDictionary
 
 from ltm100.common import DatasetAdapter, MemoryItem, QueryItem, UserId
+from ltm100.core.chat_profile import ChatProfile, ChatSettings
 from ltm100.core.op import Op, OpType, Scenario
 
 _MEMO: WeakKeyDictionary[DatasetAdapter, dict[UserId, list[MemoryItem]]] = (
@@ -298,15 +299,15 @@ class ChatReplay:
         user think/typing time before the next utterance.
 
     Both default to 0, which reproduces the original back-to-back loop. They
-    apply uniformly to every user (a per-user ratio is a planned follow-up).
+    apply uniformly unless a chat workload profile supplies group-specific
+    values.
     `answer_time` only takes effect when there is a following assistant turn;
     `user_gap` only between turns (never before the very first turn of a
     replay pass, so each pass starts cleanly).
 
     `top_k` (default 20) is the recall search depth — how many memories the
     backend returns per recall. Larger values raise the retrieve/serialize cost
-    of each search. Applies uniformly to all users (a per-user ratio is a
-    planned follow-up).
+    of each search. A chat workload profile can override it per user group.
     """
 
     name = "chat-replay"
@@ -320,6 +321,7 @@ class ChatReplay:
         top_k: int = 20,
         expand_context: int = 0,
         filter: str = "",
+        profile: ChatProfile | None = None,
     ) -> None:
         self.think = think
         self.search_every = max(1, int(search_every))
@@ -336,6 +338,11 @@ class ChatReplay:
         self.top_k = top_k
         self.expand_context = expand_context
         self.filter = filter
+        self.profile = profile
+
+    def configure_users(self, users: list[UserId], *, seed: int) -> None:
+        if self.profile is not None:
+            self.profile.assign(users, seed=seed)
 
     def validate(self, dataset: DatasetAdapter) -> None:
         if not hasattr(dataset, "turn_stream"):
@@ -358,6 +365,8 @@ class ChatReplay:
         dataset: DatasetAdapter,
         rng_state: dict[str, Any],
     ) -> Iterator[Op]:
+        settings = self._settings_for(user)
+        group = self.profile.group_for(user).name if self.profile else ""
         rng = random.Random(_seed_for(rng_state.get("seed", 0), user))
         turns = list(dataset.turn_stream(user))
         if not turns:
@@ -371,7 +380,7 @@ class ChatReplay:
                 is_assistant = role == "assistant"
                 turn_ops: list[Op] = []
                 if is_user and turn.items:
-                    if user_turn_idx % self.search_every == 0:
+                    if user_turn_idx % settings.search_every == 0:
                         # Recall before answering: query is the user turn's content.
                         first_content = turn.items[0].content
                         turn_ops.append(
@@ -379,11 +388,12 @@ class ChatReplay:
                                 type=OpType.SEARCH,
                                 query=QueryItem(
                                     query=first_content,
-                                    top_k=self.top_k,
+                                    top_k=settings.top_k,
                                     expand_context=self.expand_context,
                                     filter=self.filter,
                                 ),
-                                delay=rng.uniform(0.0, self.think),
+                                delay=rng.uniform(0.0, settings.think),
+                                group=group,
                             )
                         )
                     user_turn_idx += 1
@@ -396,30 +406,44 @@ class ChatReplay:
                         Op(
                             type=OpType.ADD,
                             items=[item],
-                            delay=rng.uniform(0.0, self.think),
+                            delay=rng.uniform(0.0, settings.think),
+                            group=group,
                         )
                 )
                 if turn_ops:
                     # user_gap: the user reads/typing before the next utterance.
                     # Attached to the first op of a user turn, but not the very
                     # first turn of a replay pass (each pass starts cleanly).
-                    if is_user and t_i > 0 and self.user_gap > 0:
-                        extra = rng.expovariate(1.0 / self.user_gap)
-                        turn_ops[0] = replace(turn_ops[0], delay=turn_ops[0].delay + extra)
+                    if is_user and t_i > 0 and settings.user_gap > 0:
+                        extra = rng.expovariate(1.0 / settings.user_gap)
+                        turn_ops[0] = replace(
+                            turn_ops[0], delay=turn_ops[0].delay + extra
+                        )
                     # Op.delay is applied before execution. Put answer time on
                     # the first assistant add so the user turn is stored first,
                     # then generation happens, then the answer is stored.
                     if (
                         is_assistant
                         and previous_user_turn
-                        and self.answer_time > 0
+                        and settings.answer_time > 0
                     ):
-                        extra = rng.expovariate(1.0 / self.answer_time)
+                        extra = rng.expovariate(1.0 / settings.answer_time)
                         turn_ops[0] = replace(
                             turn_ops[0], delay=turn_ops[0].delay + extra
                         )
                     yield from turn_ops
                 previous_user_turn = is_user and bool(turn_ops)
+
+    def _settings_for(self, user: UserId) -> ChatSettings:
+        if self.profile is not None:
+            return self.profile.group_for(user).settings
+        return ChatSettings(
+            think=self.think,
+            search_every=self.search_every,
+            answer_time=self.answer_time,
+            user_gap=self.user_gap,
+            top_k=self.top_k,
+        )
 
 
 SCENARIOS: dict[str, type] = {

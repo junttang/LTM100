@@ -32,6 +32,8 @@ class Op:
     # Wall-clock pause (seconds) BEFORE emitting this op. Closed model: think
     # time between ops. Open model: inter-arrival gap. 0 = back-to-back.
     delay: float = 0.0
+    # Optional workload-profile group. Empty for ungrouped scenarios.
+    group: str = ""
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,7 @@ class OpResult:
     status: str  # "ok" | "error" | "rejected"
     error_kind: str = ""
     n_items: int = 0  # items stored (add) or results returned (search)
+    group: str = ""  # workload-profile group, when configured
 
 
 class Scenario(Protocol):
