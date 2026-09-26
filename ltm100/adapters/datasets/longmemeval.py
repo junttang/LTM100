@@ -84,13 +84,24 @@ def _collect_turn_contents(sample: dict[str, Any]) -> list[str]:
 
 def _iter_turns(sample: dict[str, Any]) -> Iterator[tuple[str, list[str]]]:
     """Yield each non-empty haystack turn's role and chunked contents."""
+    for session in _iter_sessions(sample):
+        yield from session
+
+
+def _iter_sessions(
+    sample: dict[str, Any],
+) -> Iterator[list[tuple[str, list[str]]]]:
+    """Yield non-empty haystack sessions without losing turn boundaries."""
     for session in sample.get("haystack_sessions", []) or []:
+        turns: list[tuple[str, list[str]]] = []
         for turn in session or []:
             role = str(turn.get("role", "")).strip() or "user"
             content = str(turn.get("content", "")).strip()
             chunks = _split_chunks(content)
             if chunks:
-                yield role, chunks
+                turns.append((role, chunks))
+        if turns:
+            yield turns
 
 
 class LongMemEvalAdapter:
@@ -286,6 +297,21 @@ class LongMemEvalAdapter:
                 for content in chunks
             ]
             yield Turn(role=role, items=items)
+
+    def session_stream(self, user: UserId) -> Iterator[list[Turn]]:
+        """Yield each LongMemEval haystack session as one conversation."""
+        sample = self._sample_for_user(user)
+        for session in _iter_sessions(sample):
+            yield [
+                Turn(
+                    role=role,
+                    items=[
+                        MemoryItem(content=content, producer=user, role=role)
+                        for content in chunks
+                    ],
+                )
+                for role, chunks in session
+            ]
 
 
 __all__ = ["LongMemEvalAdapter", "_collect_turn_contents", "_split_chunks"]

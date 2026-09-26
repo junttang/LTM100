@@ -36,7 +36,7 @@ from dataclasses import replace
 from typing import Any
 from weakref import WeakKeyDictionary
 
-from ltm100.common import DatasetAdapter, MemoryItem, QueryItem, UserId
+from ltm100.common import DatasetAdapter, MemoryItem, QueryItem, Turn, UserId
 from ltm100.core.chat_profile import ChatProfile, ChatSettings
 from ltm100.core.op import Op, OpType, Scenario
 
@@ -275,10 +275,12 @@ class ChatReplay:
     driven by the conversation itself. `query_stream` is not used.
 
     Requires a dataset adapter that implements `turn_stream` (LongMemEval
-    does); the run fails loudly at validation time otherwise. The turn stream
-    wraps, so the conversation replays until the runner stops it (duration/ops
-    closed, or session_ops open). A small `think` delay between ops mimics
-    user/assistant think time so users drift out of lockstep.
+    does); the run fails loudly at validation time otherwise. A profiled closed
+    run additionally uses `session_stream` to preserve source conversation
+    boundaries while running the configured number of sessions concurrently.
+    Each session lane remains sequential and shares the same backend user.
+    Streams wrap until the runner stops them. A small `think` delay between ops
+    mimics user/assistant think time so users drift out of lockstep.
 
     `search_every` (default 1) emits a recall search before every Nth user
     turn; 1 = recall before every user turn. The user-turn counter resets each
@@ -339,6 +341,7 @@ class ChatReplay:
         self.expand_context = expand_context
         self.filter = filter
         self.profile = profile
+        self._session_cache: dict[UserId, list[list[Turn]]] = {}
 
     def configure_users(self, users: list[UserId], *, seed: int) -> None:
         if self.profile is not None:
@@ -350,6 +353,47 @@ class ChatReplay:
                 "chat-replay requires a dataset with a turn_stream "
                 "(e.g. LongMemEval); the configured dataset does not provide one"
             )
+
+    def validate_run(
+        self,
+        dataset: DatasetAdapter,
+        users: list[UserId],
+        *,
+        model: str,
+    ) -> None:
+        self.validate(dataset)
+        if self.profile is None:
+            return
+        if model == "open":
+            concurrent = [
+                user
+                for user in users
+                if self._settings_for(user).concurrent_sessions > 1
+            ]
+            if concurrent:
+                raise ValueError(
+                    "chat profile concurrent_sessions > 1 requires the closed "
+                    "load model; open-model arrivals already create sessions"
+                )
+            return
+        if not hasattr(dataset, "session_stream"):
+            raise ValueError(
+                "profiled chat-replay requires a dataset with session_stream "
+                "so conversation boundaries can be preserved"
+            )
+        for user in users:
+            required = self._settings_for(user).concurrent_sessions
+            available = len(self._sessions(user, dataset))
+            if available < required:
+                raise ValueError(
+                    f"chat profile assigns {required} concurrent session(s) to "
+                    f"user {user!r}, but the dataset provides only {available}"
+                )
+
+    def session_ids(self, user: UserId) -> list[int | None]:
+        if self.profile is None:
+            return [None]
+        return list(range(self._settings_for(user).concurrent_sessions))
 
     def plan(
         self,
@@ -367,72 +411,106 @@ class ChatReplay:
     ) -> Iterator[Op]:
         settings = self._settings_for(user)
         group = self.profile.group_for(user).name if self.profile else ""
-        rng = random.Random(_seed_for(rng_state.get("seed", 0), user))
-        turns = list(dataset.turn_stream(user))
-        if not turns:
-            return
-        while True:  # wrap the conversation for sustained load
-            user_turn_idx = 0
-            previous_user_turn = False
-            for t_i, turn in enumerate(turns):
-                role = turn.role.lower()
-                is_user = role == "user"
-                is_assistant = role == "assistant"
-                turn_ops: list[Op] = []
-                if is_user and turn.items:
-                    if user_turn_idx % settings.search_every == 0:
-                        # Recall before answering: query is the user turn's content.
-                        first_content = turn.items[0].content
-                        turn_ops.append(
-                            Op(
-                                type=OpType.SEARCH,
-                                query=QueryItem(
-                                    query=first_content,
-                                    top_k=settings.top_k,
-                                    expand_context=self.expand_context,
-                                    filter=self.filter,
-                                ),
-                                delay=rng.uniform(0.0, settings.think),
-                                group=group,
-                            )
-                        )
-                    user_turn_idx += 1
-                for item in turn.items:
-                    # Turn.role is the dialogue-level source of truth. Preserve
-                    # an explicitly supplied item role, but fill it when a
-                    # dataset only annotates the enclosing turn.
-                    item = item if item.role else replace(item, role=turn.role)
+        session_id = rng_state.get("session_id")
+        seed_key = user if session_id is None else f"{user}:chat-session:{session_id}"
+        rng = random.Random(_seed_for(rng_state.get("seed", 0), seed_key))
+
+        if session_id is None:
+            turns = list(dataset.turn_stream(user))
+            if not turns:
+                return
+            while True:  # legacy flattened replay when no profile is active
+                yield from self._conversation_ops(
+                    turns, settings, rng, group=group, session_id=None
+                )
+        else:
+            sessions = self._sessions(user, dataset)
+            session_count = settings.concurrent_sessions
+            assigned = sessions[session_id::session_count]
+            if not assigned:
+                return
+            while True:
+                for turns in assigned:
+                    yield from self._conversation_ops(
+                        turns,
+                        settings,
+                        rng,
+                        group=group,
+                        session_id=session_id,
+                    )
+
+    def _conversation_ops(
+        self,
+        turns: list[Turn],
+        settings: ChatSettings,
+        rng: random.Random,
+        *,
+        group: str,
+        session_id: int | None,
+    ) -> Iterator[Op]:
+        """Replay one conversation in order within one concurrent lane."""
+        user_turn_idx = 0
+        previous_user_turn = False
+        for turn_index, turn in enumerate(turns):
+            role = turn.role.lower()
+            is_user = role == "user"
+            is_assistant = role == "assistant"
+            turn_ops: list[Op] = []
+            if is_user and turn.items:
+                if user_turn_idx % settings.search_every == 0:
+                    first_content = turn.items[0].content
                     turn_ops.append(
                         Op(
-                            type=OpType.ADD,
-                            items=[item],
+                            type=OpType.SEARCH,
+                            query=QueryItem(
+                                query=first_content,
+                                top_k=settings.top_k,
+                                expand_context=self.expand_context,
+                                filter=self.filter,
+                            ),
                             delay=rng.uniform(0.0, settings.think),
                             group=group,
+                            session_id=session_id,
                         )
+                    )
+                user_turn_idx += 1
+            for item in turn.items:
+                item = item if item.role else replace(item, role=turn.role)
+                turn_ops.append(
+                    Op(
+                        type=OpType.ADD,
+                        items=[item],
+                        delay=rng.uniform(0.0, settings.think),
+                        group=group,
+                        session_id=session_id,
+                    )
                 )
-                if turn_ops:
-                    # user_gap: the user reads/typing before the next utterance.
-                    # Attached to the first op of a user turn, but not the very
-                    # first turn of a replay pass (each pass starts cleanly).
-                    if is_user and t_i > 0 and settings.user_gap > 0:
-                        extra = rng.expovariate(1.0 / settings.user_gap)
-                        turn_ops[0] = replace(
-                            turn_ops[0], delay=turn_ops[0].delay + extra
-                        )
-                    # Op.delay is applied before execution. Put answer time on
-                    # the first assistant add so the user turn is stored first,
-                    # then generation happens, then the answer is stored.
-                    if (
-                        is_assistant
-                        and previous_user_turn
-                        and settings.answer_time > 0
-                    ):
-                        extra = rng.expovariate(1.0 / settings.answer_time)
-                        turn_ops[0] = replace(
-                            turn_ops[0], delay=turn_ops[0].delay + extra
-                        )
-                    yield from turn_ops
-                previous_user_turn = is_user and bool(turn_ops)
+            if turn_ops:
+                if is_user and turn_index > 0 and settings.user_gap > 0:
+                    extra = rng.expovariate(1.0 / settings.user_gap)
+                    turn_ops[0] = replace(
+                        turn_ops[0], delay=turn_ops[0].delay + extra
+                    )
+                if (
+                    is_assistant
+                    and previous_user_turn
+                    and settings.answer_time > 0
+                ):
+                    extra = rng.expovariate(1.0 / settings.answer_time)
+                    turn_ops[0] = replace(
+                        turn_ops[0], delay=turn_ops[0].delay + extra
+                    )
+                yield from turn_ops
+            previous_user_turn = is_user and bool(turn_ops)
+
+    def _sessions(
+        self, user: UserId, dataset: DatasetAdapter
+    ) -> list[list[Turn]]:
+        sessions = self._session_cache.get(user)
+        if sessions is None:
+            sessions = list(dataset.session_stream(user))
+            self._session_cache[user] = sessions
+        return sessions
 
     def _settings_for(self, user: UserId) -> ChatSettings:
         if self.profile is not None:

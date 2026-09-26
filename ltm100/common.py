@@ -88,7 +88,7 @@ class DatasetAdapter(Protocol):
     `chat-replay`), not provided by the adapter. There is therefore no
     `query_stream` on this contract; the adapter only supplies what gets added
     (`memory_stream`) and, for dialogue datasets, the conversation structure
-    (`turn_stream`).
+    (`turn_stream` and, when available, independent `session_stream` entries).
     """
 
     name: str
@@ -108,6 +108,15 @@ class DatasetAdapter(Protocol):
         this so a scenario can replay a chatbot-with-LTM workload (recall
         before a user turn, then ingest the turn). Adapters without dialogue
         structure do not implement it; callers should check with `hasattr`.
+        """
+        ...
+
+    def session_stream(self, user: UserId) -> Iterator[list[Turn]]:
+        """Yield independent conversations for this user.
+
+        Optional: dialogue adapters implement this when they preserve source
+        conversation boundaries. ``chat-replay`` uses it to run multiple
+        sessions concurrently without splitting or reordering any dialogue.
         """
         ...
 

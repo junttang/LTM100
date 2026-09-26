@@ -83,6 +83,9 @@ class DialogueDataset:
         yield Turn(role="user", items=[MemoryItem(content=f"{user} question")])
         yield Turn(role="assistant", items=[MemoryItem(content=f"{user} answer")])
 
+    def session_stream(self, user: UserId):
+        yield list(self.turn_stream(user))
+
 
 class QueryBackend:
     name = "query"
@@ -197,6 +200,28 @@ def test_profile_defaults_and_group_overrides(tmp_path):
     assert power.settings.top_k == 80
 
 
+def test_profile_accepts_concurrent_session_counts(tmp_path):
+    profile = _load(
+        _write_profile(
+            tmp_path,
+            {
+                "version": 1,
+                "groups": [
+                    {
+                        "name": "intensive",
+                        "share": 1.0,
+                        "top_k": 100,
+                        "concurrent_sessions": 5,
+                    }
+                ],
+            },
+        )
+    )
+
+    assert profile.groups[0].settings.concurrent_sessions == 5
+    assert profile.metadata(10)["groups"][0]["concurrent_sessions"] == 5
+
+
 @pytest.mark.parametrize(
     ("change", "message"),
     [
@@ -214,14 +239,6 @@ def test_profile_defaults_and_group_overrides(tmp_path):
         (
             {"groups": [{"name": "a", "share": 1.0, "topk": 20}]},
             "unknown field",
-        ),
-        (
-            {
-                "groups": [
-                    {"name": "a", "share": 1.0, "concurrent_sessions": 2}
-                ]
-            },
-            "until concurrent chat session",
         ),
     ],
 )
@@ -267,11 +284,21 @@ def test_raw_report_includes_group_only_when_present(tmp_path):
     path = tmp_path / "raw.ndjson"
     write_raw_ndjson(
         [
-            OpResult(OpType.SEARCH, "u0", 1.0, 2.0, "ok", group="power"),
+            OpResult(
+                OpType.SEARCH,
+                "u0",
+                1.0,
+                2.0,
+                "ok",
+                group="power",
+                session_id=2,
+            ),
             OpResult(OpType.ADD, "u1", 2.0, 3.0, "ok"),
         ],
         path,
     )
     rows = [json.loads(line) for line in path.read_text().splitlines()]
     assert rows[0]["group"] == "power"
+    assert rows[0]["session_id"] == 2
     assert "group" not in rows[1]
+    assert "session_id" not in rows[1]

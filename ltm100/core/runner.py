@@ -1,9 +1,10 @@
 """Load core: orchestrates virtual users and drives a backend.
 
-This is the closed-model runner: a fixed number of virtual users, each an
-asyncio task that loops over its scenario plan emitting one request at a time
-(in-flight = 1 per user). An optional global semaphore caps total concurrency
-independently of the user count.
+This is the closed-model runner: a fixed number of virtual users, each with one
+or more scenario lanes that emit one request at a time. Ordinary scenarios use
+one lane per user; a profiled chat replay can use several independent session
+lanes. An optional global semaphore caps total concurrency independently of
+the user and lane counts.
 
 Termination is either time-based (duration) or count-based (total ops). The
 runner drains in-flight requests at termination, then returns all recorded
@@ -64,18 +65,20 @@ class LoadRunner:
         self._record_results = True
 
     async def run(self) -> list[OpResult]:
-        users = self.shard_users(
-            self._configure_users(
-                self.dataset.users(self.config.users, seed=self.config.seed)
-            )
+        all_users = self._configure_users(
+            self.dataset.users(self.config.users, seed=self.config.seed)
         )
+        users = self.shard_users(all_users)
         self.users = users
 
         # Let the scenario reject a misconfigured dataset loudly, before any
         # setup/provisioning or user runs. A plan-time raise would be swallowed
         # by the gather(return_exceptions=True) in the user loops.
+        validate_run = getattr(self.scenario, "validate_run", None)
         validate = getattr(self.scenario, "validate", None)
-        if validate is not None:
+        if validate_run is not None:
+            validate_run(self.dataset, users, model=self.config.model)
+        elif validate is not None:
             validate(self.dataset)
 
         await self.client.setup(users)
@@ -167,12 +170,25 @@ class LoadRunner:
         for i, user in enumerate(users):
             # Staggered start for ramp-up: user i starts at i*ramp_step.
             start_delay = self._ramp_delay(i, len(users))
-            tasks.append(
-                asyncio.create_task(self._user_loop(user, start_delay, deadline))
-            )
+            session_ids = self._session_ids(user)
+            for session_id in session_ids:
+                tasks.append(
+                    asyncio.create_task(
+                        self._user_loop(
+                            user,
+                            start_delay,
+                            deadline,
+                            session_id=session_id,
+                        )
+                    )
+                )
         if deadline is not None:
             asyncio.create_task(self._timer(deadline, self._stop))
         await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _session_ids(self, user: UserId) -> list[int | None]:
+        session_ids = getattr(self.scenario, "session_ids", None)
+        return session_ids(user) if session_ids is not None else [None]
 
     async def _open_loop(self, users: list[UserId], deadline: float) -> None:
         """Open model: a Poisson arrival process spawns user sessions, each
@@ -283,6 +299,7 @@ class LoadRunner:
             error_kind="queue_full",
             n_items=0,
             group=op.group,
+            session_id=op.session_id,
         )
         if self._record_results:
             await self.recorder.record(result)
@@ -360,12 +377,19 @@ class LoadRunner:
             return True
 
     async def _user_loop(
-        self, user: UserId, start_delay: float, deadline: float | None
+        self,
+        user: UserId,
+        start_delay: float,
+        deadline: float | None,
+        *,
+        session_id: int | None = None,
     ) -> None:
         if start_delay > 0:
             await asyncio.sleep(start_delay)
 
         rng_state = {"seed": self.config.seed, "user": user}
+        if session_id is not None:
+            rng_state["session_id"] = session_id
         plan = self.scenario.plan(user, self.dataset, rng_state)
 
         for op in plan:
@@ -428,6 +452,7 @@ class LoadRunner:
             error_kind=error_kind,
             n_items=n_items,
             group=op.group,
+            session_id=op.session_id,
         )
         if self._record_results:
             await self.recorder.record(result)

@@ -180,11 +180,6 @@ def _settings(raw: dict[str, Any], where: str) -> ChatSettings:
         raise ValueError(f"{where}.answer_time must be >= 0")
     if user_gap < 0:
         raise ValueError(f"{where}.user_gap must be >= 0")
-    if sessions != 1:
-        raise ValueError(
-            f"{where}.concurrent_sessions must be 1 until concurrent chat "
-            "session execution is enabled"
-        )
     return ChatSettings(
         think=think,
         search_every=search_every,

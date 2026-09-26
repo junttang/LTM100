@@ -34,6 +34,8 @@ class Op:
     delay: float = 0.0
     # Optional workload-profile group. Empty for ungrouped scenarios.
     group: str = ""
+    # Concurrent chat lane within one backend user. None for other workloads.
+    session_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,7 @@ class OpResult:
     error_kind: str = ""
     n_items: int = 0  # items stored (add) or results returned (search)
     group: str = ""  # workload-profile group, when configured
+    session_id: int | None = None
 
 
 class Scenario(Protocol):

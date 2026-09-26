@@ -20,7 +20,9 @@ class RunConfig:
     duration: float = 0.0
     # Count-based termination: stop after this many total ops (0 = disabled).
     ops: int = 0
-    # Global concurrency cap (0 = no cap, only per-user in-flight=1 applies).
+    # Global concurrency cap. With 0, scenario-level concurrency is uncapped;
+    # ordinary workloads still emit one request per user at a time, while a
+    # profiled chat workload may run several independent sessions per user.
     global_concurrency: int = 0
     # Warm-up seconds run before measurement. Requests execute against the
     # backend but do not consume duration/ops or enter reports.
