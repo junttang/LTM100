@@ -19,7 +19,8 @@ configurations fail validation if paired with `chat-replay`.
 `chat-profile.yaml` is an optional second YAML passed with
 `--chat-profile examples/chat-profile.yaml`. It assigns users deterministically
 to standard, power, and intensive groups. `concurrent_sessions` controls fixed
-closed-model lanes; `max_sessions_per_user` caps active open-model sessions.
+closed-model lanes; `max_sessions_per_user` caps active open-model sessions
+and is required for every group when the profile is used with the open model.
 
 For `search-load`, use `--preingest` so the measured search begins with a
 populated corpus. The same is recommended for `mixed` when searches should be

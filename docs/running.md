@@ -89,7 +89,8 @@ Group fields override `defaults`, which override the corresponding CLI values:
 - `concurrent_sessions` is closed-model only. It creates that many fixed,
   sequential conversation lanes for each user.
 - `max_sessions_per_user` is open-model only. It caps active Poisson-arriving
-  sessions for each user; omitting it leaves session admission uncapped.
+  sessions for each user and is required for every group in a profiled open
+  run. This keeps every arrival on a boundary-preserving conversation lane.
 
 All lanes for one user share the same backend tenant and memories. LongMemEval
 `haystack_sessions` are distributed without overlap across the user's lanes;

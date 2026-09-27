@@ -370,6 +370,19 @@ class ChatReplay:
                 "profiled chat-replay requires a dataset with session_stream "
                 "so conversation boundaries can be preserved"
             )
+        if model == "open":
+            missing_caps = [
+                group.name
+                for group in self.profile.groups
+                if group.settings.max_sessions_per_user is None
+            ]
+            if missing_caps:
+                names = ", ".join(missing_caps)
+                raise ValueError(
+                    "profiled chat-replay with the open load model requires "
+                    "max_sessions_per_user for every group; missing for: "
+                    f"{names}"
+                )
         for user in users:
             settings = self._settings_for(user)
             required = (
@@ -377,8 +390,7 @@ class ChatReplay:
                 if model == "open"
                 else settings.concurrent_sessions
             )
-            if required is None:
-                continue
+            assert required is not None  # validated above for profiled open runs
             available = len(self._sessions(user, dataset))
             if available < required:
                 raise ValueError(

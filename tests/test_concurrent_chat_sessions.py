@@ -242,6 +242,30 @@ async def test_open_model_uses_separate_per_user_session_cap():
 
 
 @pytest.mark.asyncio
+async def test_profiled_open_model_requires_session_cap_before_setup():
+    backend = ConcurrentBackend()
+    runner = LoadRunner(
+        client=backend,
+        dataset=SessionDataset(sessions=2),
+        scenario=ChatReplay(profile=_profile(1)),
+        config=RunConfig(
+            users=1,
+            duration=0.1,
+            model="open",
+            arrival_rate=10.0,
+            session_ops=4,
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="requires max_sessions_per_user for every group",
+    ):
+        await runner.run()
+    assert backend.setup_called is False
+
+
+@pytest.mark.asyncio
 async def test_open_session_cap_must_fit_available_source_conversations():
     backend = ConcurrentBackend()
     runner = LoadRunner(

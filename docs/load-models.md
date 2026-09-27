@@ -94,11 +94,12 @@ successful requests only, so zero-time rejections cannot lower p50 or p99.
 ### Profiled chat-session admission
 
 `chat-replay` profiles add an earlier, session-level admission layer through
-`max_sessions_per_user`. Each Poisson arrival is first assigned to its intended
-user round-robin. If that user already has the configured number of active
-chat sessions, the session is rejected; it is never moved to another tenant,
-and `--arrival-rate` is not multiplied. An admitted session occupies one
-reusable source-conversation lane until it finishes its `--session-ops` slice.
+`max_sessions_per_user`, which is required for every group in a profiled open
+run. Each Poisson arrival is first assigned to its intended user round-robin.
+If that user already has the configured number of active chat sessions, the
+session is rejected; it is never moved to another tenant, and `--arrival-rate`
+is not multiplied. An admitted session occupies one reusable
+source-conversation lane until it finishes its `--session-ops` slice.
 
 Session admission appears under `summary.sessions` overall and by workload
 group. It is intentionally separate from request rejection: admitted sessions'

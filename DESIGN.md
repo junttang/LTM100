@@ -226,8 +226,9 @@ Hybrid: both **closed** and **open** models are supported, sharing one runner.
 - Each session performs a bounded number of ops then leaves.
 - Concurrency is a *result* of arrival rate vs. service rate, not fixed.
 - Profiled `chat-replay` may cap active sessions per user through
-  `max_sessions_per_user`; saturated-user arrivals are rejected without
-  changing the configured arrival rate.
+  `max_sessions_per_user`, required for every group under the open model;
+  saturated-user arrivals are rejected without changing the configured
+  arrival rate.
 - **Congestion policy** (decided at implementation): when arrival rate
   exceeds server capacity, define a bounded queue / rejection, and record
   rejections + queue depth as metrics. No silent dropping.

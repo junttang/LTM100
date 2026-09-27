@@ -252,7 +252,9 @@ partition the user's source conversations by stride. In the open model,
 `--arrival-rate`; an arrival for a saturated user is rejected rather than
 reassigned. `summary.sessions` reports this admission separately from
 request-level queue rejection. Every lane for a user shares that user's LTM
-state, and `--global-concurrency` remains the final request cap.
+state, and `--global-concurrency` remains the final request cap. A profiled
+open run requires `max_sessions_per_user` for every group so it can always
+allocate a boundary-preserving lane.
 
 **Pre-ingest:** not needed — the user adds its own conversation as it goes
 and recalls against what it has stored so far.
