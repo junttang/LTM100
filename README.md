@@ -14,6 +14,8 @@ Current release: **v0.4.2**
 
 - Closed and open load models for fixed-concurrency and arrival-driven tests.
 - Four scenarios: `chat-replay`, `add-load`, `search-load`, and `mixed`.
+- Weighted chat workload profiles with group-specific recall, timing, and
+  closed/open session controls.
 - Bounded admission and rejection accounting for overload experiments.
 - Multi-process load generation so the benchmark client can scale beyond one
   event-loop core.

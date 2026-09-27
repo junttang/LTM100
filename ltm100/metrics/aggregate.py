@@ -42,6 +42,17 @@ def _percentiles(values: list[float]) -> dict[str, float]:
 
 def aggregate(results: Iterable[OpResult]) -> dict:
     results = list(results)
+    summary = _aggregate(results)
+    groups = sorted({result.group for result in results if result.group})
+    if groups:
+        summary["by_group"] = {
+            group: _aggregate([result for result in results if result.group == group])
+            for group in groups
+        }
+    return summary
+
+
+def _aggregate(results: list[OpResult]) -> dict:
     if not results:
         return {
             "total": 0,

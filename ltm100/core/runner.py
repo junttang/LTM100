@@ -1,9 +1,10 @@
 """Load core: orchestrates virtual users and drives a backend.
 
-This is the closed-model runner: a fixed number of virtual users, each an
-asyncio task that loops over its scenario plan emitting one request at a time
-(in-flight = 1 per user). An optional global semaphore caps total concurrency
-independently of the user count.
+This is the closed-model runner: a fixed number of virtual users, each with one
+or more scenario lanes that emit one request at a time. Ordinary scenarios use
+one lane per user; a profiled chat replay can use several independent session
+lanes. An optional global semaphore caps total concurrency independently of
+the user and lane counts.
 
 Termination is either time-based (duration) or count-based (total ops). The
 runner drains in-flight requests at termination, then returns all recorded
@@ -12,9 +13,10 @@ OpResults.
 Open-model (arrival-rate driven) behavior shares this same runner: arriving
 sessions each consume a bounded number of ops from the Scenario plan (the
 op mix is owned by the scenario, not a runner-level weight). Inter-arrival
-is a Poisson process; congestion policy (rejection under overload) is
-enforced by a bounded queue on the global concurrency cap and recorded as
-status="rejected".
+is a Poisson process. A scenario may cap active sessions per user; rejected
+session arrivals are counted separately from request metrics. Request-level
+congestion policy is enforced by a bounded queue on the global concurrency
+cap and recorded as status="rejected".
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ import logging
 import random
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 from ltm100.common import DatasetAdapter, LTMClient, UserId
 from ltm100.core.config import RunConfig
@@ -31,6 +34,47 @@ from ltm100.core.op import Op, OpResult, OpType, Scenario
 from ltm100.metrics.recorder import InMemoryRecorder, MetricsRecorder
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SessionCounts:
+    offered: int = 0
+    admitted: int = 0
+    rejected: int = 0
+
+    def as_dict(self) -> dict[str, int | float]:
+        return {
+            "offered": self.offered,
+            "admitted": self.admitted,
+            "rejected": self.rejected,
+            "rejection_rate": (
+                self.rejected / self.offered if self.offered else 0.0
+            ),
+        }
+
+
+@dataclass
+class SessionAdmissionStats(SessionCounts):
+    """Open-model session arrivals, separate from request-level metrics."""
+
+    by_group: dict[str, SessionCounts] | None = None
+
+    def record(self, status: str, group: str = "") -> None:
+        setattr(self, status, getattr(self, status) + 1)
+        if group:
+            if self.by_group is None:
+                self.by_group = {}
+            counts = self.by_group.setdefault(group, SessionCounts())
+            setattr(counts, status, getattr(counts, status) + 1)
+
+    def as_dict(self) -> dict[str, object]:
+        result: dict[str, object] = super().as_dict()
+        if self.by_group:
+            result["by_group"] = {
+                group: counts.as_dict()
+                for group, counts in sorted(self.by_group.items())
+            }
+        return result
 
 
 class LoadRunner:
@@ -62,18 +106,23 @@ class LoadRunner:
         self._ops_lock = asyncio.Lock()
         self._start_time = 0.0
         self._record_results = True
+        self.session_stats = SessionAdmissionStats()
 
     async def run(self) -> list[OpResult]:
-        users = self.shard_users(
+        all_users = self._configure_users(
             self.dataset.users(self.config.users, seed=self.config.seed)
         )
+        users = self.shard_users(all_users)
         self.users = users
 
         # Let the scenario reject a misconfigured dataset loudly, before any
         # setup/provisioning or user runs. A plan-time raise would be swallowed
         # by the gather(return_exceptions=True) in the user loops.
+        validate_run = getattr(self.scenario, "validate_run", None)
         validate = getattr(self.scenario, "validate", None)
-        if validate is not None:
+        if validate_run is not None:
+            validate_run(self.dataset, users, model=self.config.model)
+        elif validate is not None:
             validate(self.dataset)
 
         await self.client.setup(users)
@@ -109,6 +158,13 @@ class LoadRunner:
         await self._call_hook(self.on_measure_end, "on_measure_end")
         return self.recorder.raw()
 
+    def _configure_users(self, users: list[UserId]) -> list[UserId]:
+        """Resolve whole-run scenario state before process-local sharding."""
+        configure = getattr(self.scenario, "configure_users", None)
+        if configure is not None:
+            configure(users, seed=self.config.seed)
+        return users
+
     async def _run_workload(self, *, duration: float) -> None:
         """Run one workload phase.
 
@@ -131,6 +187,7 @@ class LoadRunner:
         self._stop = asyncio.Event()
         self._ops_done = 0
         self._admitted = 0
+        self.session_stats = SessionAdmissionStats()
 
     async def _call_hook(
         self, hook: Callable[[], Awaitable[None]] | None, what: str
@@ -158,12 +215,25 @@ class LoadRunner:
         for i, user in enumerate(users):
             # Staggered start for ramp-up: user i starts at i*ramp_step.
             start_delay = self._ramp_delay(i, len(users))
-            tasks.append(
-                asyncio.create_task(self._user_loop(user, start_delay, deadline))
-            )
+            session_ids = self._session_ids(user)
+            for session_id in session_ids:
+                tasks.append(
+                    asyncio.create_task(
+                        self._user_loop(
+                            user,
+                            start_delay,
+                            deadline,
+                            session_id=session_id,
+                        )
+                    )
+                )
         if deadline is not None:
             asyncio.create_task(self._timer(deadline, self._stop))
         await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _session_ids(self, user: UserId) -> list[int | None]:
+        session_ids = getattr(self.scenario, "session_ids", None)
+        return session_ids(user) if session_ids is not None else [None]
 
     async def _open_loop(self, users: list[UserId], deadline: float) -> None:
         """Open model: a Poisson arrival process spawns user sessions, each
@@ -171,12 +241,17 @@ class LoadRunner:
         emergent (a function of arrival rate vs. service rate).
 
         The fixed pool of `users` provides tenant identities; arriving sessions
-        draw users round-robin so per-user state already exists. Each arriving
-        session is a coroutine; the loop keeps spawning until the deadline."""
+        draw users round-robin so per-user state already exists. A scenario may
+        impose a per-user session cap; a saturated user's arrival is rejected,
+        never reassigned to another tenant. Each admitted session is a
+        coroutine; the loop keeps generating arrivals until the deadline."""
         rng = random.Random(self.config.seed)
         rate = self.config.arrival_rate
         session_tasks: list[asyncio.Task] = []
         next_user = 0
+        active_sessions: dict[UserId, set[int]] = {
+            user: set() for user in users
+        }
 
         # Always run the timer to honor the deadline even if all sessions are
         # short; the arrival generator stops at the deadline.
@@ -197,16 +272,63 @@ class LoadRunner:
                 break
             user = users[next_user % len(users)]
             next_user += 1
+            group_for = getattr(self.scenario, "session_group", None)
+            group = group_for(user) if group_for is not None else ""
+            if self._record_results:
+                self.session_stats.record("offered", group)
+            admission = self._admit_open_session(
+                user, active_sessions
+            )
+            if admission is None:
+                if self._record_results:
+                    self.session_stats.record("rejected", group)
+                continue
+            session_id, session_count = admission
+            if self._record_results:
+                self.session_stats.record("admitted", group)
             session_tasks.append(
-                asyncio.create_task(self._open_session(user, deadline))
+                asyncio.create_task(
+                    self._open_session(
+                        user,
+                        deadline,
+                        session_id=session_id,
+                        session_count=session_count,
+                        active_sessions=active_sessions,
+                    )
+                )
             )
 
         # Let in-flight sessions finish (bounded by session_ops, so finite).
         if session_tasks:
             await asyncio.gather(*session_tasks, return_exceptions=True)
 
+    def _admit_open_session(
+        self,
+        user: UserId,
+        active: dict[UserId, set[int]],
+    ) -> tuple[int | None, int | None] | None:
+        """Reserve one profile-defined session lane for the selected user."""
+        cap_for = getattr(self.scenario, "max_sessions_per_user", None)
+        if cap_for is None:
+            return None, None
+        cap = cap_for(user)
+        if cap is None:
+            return None, None
+        occupied = active[user]
+        if len(occupied) >= cap:
+            return None
+        session_id = next(i for i in range(cap) if i not in occupied)
+        occupied.add(session_id)
+        return session_id, cap
+
     async def _open_session(
-        self, user: UserId, deadline: float
+        self,
+        user: UserId,
+        deadline: float,
+        *,
+        session_id: int | None,
+        session_count: int | None,
+        active_sessions: dict[UserId, set[int]],
     ) -> None:
         """One arriving user's session: a bounded number of ops then exit.
 
@@ -216,26 +338,33 @@ class LoadRunner:
         op is rejected (status='rejected') rather than executed."""
         n_ops = self.config.session_ops
         rng_state = {"seed": self.config.seed, "user": user}
+        if session_id is not None:
+            rng_state["session_id"] = session_id
+            rng_state["session_count"] = session_count
         plan = self.scenario.plan(user, self.dataset, rng_state)
-        for _ in range(n_ops):
-            if self._should_stop() or time.monotonic() >= deadline:
-                return
-            try:
-                op = next(plan)
-            except StopIteration:
-                return
-            if op.delay > 0:
-                await asyncio.sleep(min(op.delay, self._remaining_until(deadline)))
+        try:
+            for _ in range(n_ops):
                 if self._should_stop() or time.monotonic() >= deadline:
                     return
-            acquired = await self._acquire_slot_bounded()
-            if not acquired:
-                await self._record_rejected(op, user)
-                continue
-            try:
-                await self._execute(user, op)
-            finally:
-                self._release_slot()
+                try:
+                    op = next(plan)
+                except StopIteration:
+                    return
+                if op.delay > 0:
+                    await asyncio.sleep(min(op.delay, self._remaining_until(deadline)))
+                    if self._should_stop() or time.monotonic() >= deadline:
+                        return
+                acquired = await self._acquire_slot_bounded()
+                if not acquired:
+                    await self._record_rejected(op, user)
+                    continue
+                try:
+                    await self._execute(user, op)
+                finally:
+                    self._release_slot()
+        finally:
+            if session_id is not None:
+                active_sessions[user].remove(session_id)
 
     async def _acquire_slot_bounded(self) -> bool:
         """Try to take a global concurrency slot, queuing up to queue_bound.
@@ -273,6 +402,8 @@ class LoadRunner:
             status="rejected",
             error_kind="queue_full",
             n_items=0,
+            group=op.group,
+            session_id=op.session_id,
         )
         if self._record_results:
             await self.recorder.record(result)
@@ -350,12 +481,19 @@ class LoadRunner:
             return True
 
     async def _user_loop(
-        self, user: UserId, start_delay: float, deadline: float | None
+        self,
+        user: UserId,
+        start_delay: float,
+        deadline: float | None,
+        *,
+        session_id: int | None = None,
     ) -> None:
         if start_delay > 0:
             await asyncio.sleep(start_delay)
 
         rng_state = {"seed": self.config.seed, "user": user}
+        if session_id is not None:
+            rng_state["session_id"] = session_id
         plan = self.scenario.plan(user, self.dataset, rng_state)
 
         for op in plan:
@@ -417,6 +555,8 @@ class LoadRunner:
             status=status,
             error_kind=error_kind,
             n_items=n_items,
+            group=op.group,
+            session_id=op.session_id,
         )
         if self._record_results:
             await self.recorder.record(result)

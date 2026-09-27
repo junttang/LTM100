@@ -90,6 +90,23 @@ def test_turn_stream_propagates_turn_role_to_every_chunk():
     assert len(turns[0].items) > 1
 
 
+def test_session_stream_preserves_haystack_conversation_boundaries():
+    adapter = _make_adapter(_synthetic_records(1))
+    user = adapter.users(1, seed=0)[0]
+
+    sessions = list(adapter.session_stream(user))
+
+    assert len(sessions) == 2
+    assert [turn.role for turn in sessions[0]] == ["user", "assistant"]
+    assert [turn.role for turn in sessions[1]] == ["user"]
+    assert all(
+        item.role == turn.role
+        for session in sessions
+        for turn in session
+        for item in turn.items
+    )
+
+
 def test_missing_source_role_defaults_to_user():
     records = _synthetic_records(1)
     records[0]["haystack_sessions"][0][0].pop("role")

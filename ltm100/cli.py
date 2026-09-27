@@ -20,8 +20,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ltm100.config import build_backend, build_dataset, load_config
+from ltm100.core.chat_profile import load_chat_profile
 from ltm100.core.config import RunConfig
-from ltm100.core.multiproc import run_shards
+from ltm100.core.multiproc import ShardResult, run_shards
 from ltm100.core.runner import LoadRunner
 from ltm100.core.scenarios import get_scenario
 from ltm100.metrics.aggregate import aggregate
@@ -84,6 +85,8 @@ def _build_run_config(args: argparse.Namespace) -> RunConfig:
 
 
 def _build_scenario(args: argparse.Namespace):
+    if args.chat_profile and args.scenario != "chat-replay":
+        raise ValueError("--chat-profile is only valid with --scenario chat-replay")
     kwargs: dict[str, Any] = {}
     if args.scenario == "mixed":
         kwargs["search_weight"] = args.search_weight
@@ -95,6 +98,15 @@ def _build_scenario(args: argparse.Namespace):
         kwargs["answer_time"] = args.answer_time
         kwargs["user_gap"] = args.user_gap
         kwargs["top_k"] = args.top_k
+        if args.chat_profile:
+            kwargs["profile"] = load_chat_profile(
+                args.chat_profile,
+                think=args.think,
+                search_every=args.search_every,
+                answer_time=args.answer_time,
+                user_gap=args.user_gap,
+                top_k=args.top_k,
+            )
     elif args.scenario == "search-load":
         kwargs["top_k"] = args.top_k
     # Every scenario that searches takes the server-side search knobs.
@@ -104,7 +116,7 @@ def _build_scenario(args: argparse.Namespace):
     return get_scenario(args.scenario, **kwargs)
 
 
-async def _run_shard_async(args: argparse.Namespace) -> list:
+async def _run_shard_async(args: argparse.Namespace) -> ShardResult:
     cfg = load_config(args.config)
     dataset = build_dataset(cfg.dataset)
     backend = build_backend(cfg.backend)
@@ -152,7 +164,7 @@ async def _run_shard_async(args: argparse.Namespace) -> list:
         if run_cfg.delete_on_exit:
             # Each shard owns the users it drove, so it tears down its own.
             await backend.teardown(runner.users, delete=True)
-    return runner.recorder.raw()
+    return ShardResult(runner.recorder.raw(), runner.session_stats)
 
 
 def _shard_entry(args_dict: dict, proc_index: int) -> list:
@@ -255,6 +267,16 @@ def _run_metadata(
             answer_time=args.answer_time,
             user_gap=args.user_gap,
         )
+        if args.chat_profile:
+            profile = load_chat_profile(
+                args.chat_profile,
+                think=args.think,
+                search_every=args.search_every,
+                answer_time=args.answer_time,
+                user_gap=args.user_gap,
+                top_k=args.top_k,
+            )
+            meta["chat_profile"] = profile.metadata(args.users)
 
     return meta
 
@@ -289,6 +311,9 @@ def _probe_server_metrics(cfg) -> dict:
 def _run(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     run_cfg = _build_run_config(args)
+    # Validate scenario-specific files and options before probing or mutating
+    # the backend. Each shard rebuilds the scenario it will actually run.
+    _build_scenario(args)
     # Each shard tears down the users it drove, which assumes a project per
     # user. With backend.project_id set they all share one, so the first shard
     # to finish would delete it under the others mid-run. Refuse rather than
@@ -367,7 +392,7 @@ def _run(args: argparse.Namespace) -> int:
             collector is not None or run_cfg.warmup > 0
         )
         if synchronize_workers:
-            raw = run_shards(
+            shard_result = run_shards(
                 _shard_entry,
                 vars(args),
                 run_cfg.procs,
@@ -383,7 +408,7 @@ def _run(args: argparse.Namespace) -> int:
                 ),
             )
         else:
-            raw = run_shards(_shard_entry, vars(args), run_cfg.procs)
+            shard_result = run_shards(_shard_entry, vars(args), run_cfg.procs)
         ended_at = datetime.now(timezone.utc)
     finally:
         _server_metrics_collector = None
@@ -391,7 +416,15 @@ def _run(args: argparse.Namespace) -> int:
     if collector is not None:
         server_metrics = finish(collector.result(), window="measured")
 
+    if isinstance(shard_result, ShardResult):
+        raw = shard_result.results
+        session_stats = shard_result.sessions
+    else:  # compatibility with integrations that wrap run_shards
+        raw = shard_result
+        session_stats = None
     summary = aggregate(raw)
+    if args.model == "open" and session_stats is not None:
+        summary["sessions"] = session_stats.as_dict()
 
     meta = _run_metadata(
         args,
@@ -521,6 +554,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="chat-replay: issue a recall search every N user turns (default 1 = every user turn)",
+    )
+    run.add_argument(
+        "--chat-profile",
+        default=None,
+        help="chat-replay: YAML user-group workload profile; group values "
+        "override the corresponding CLI defaults",
     )
     run.add_argument(
         "--answer-time",
