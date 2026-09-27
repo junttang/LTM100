@@ -38,9 +38,10 @@ size.
 
 Concurrency is controlled on two layers:
 
-1. **Per-user in-flight = 1 (fixed).** Each user emits one request at a time
-   and waits for the response before sending the next. There is never more
-   than one in-flight request per user.
+1. **Per-session in-flight = 1.** Each session lane emits one request at a
+   time and waits for the response before sending the next. Ordinary workloads
+   use one lane per user; a chat workload profile may configure several lanes
+   sharing the same user.
 2. **`--global-concurrency C` (optional, 0 = no cap).** A global bound on the
    total number of in-flight requests across all users, enforced with an
    `asyncio.Semaphore`. Even with N users firing simultaneously, at most C
@@ -197,7 +198,9 @@ interleaves them.
 
 **Users:** `--users N`.
 
-**Concurrency:** per-user in-flight 1; the conversation is replayed in order.
+**Concurrency:** per-session in-flight 1; each conversation is replayed in
+order. An optional chat profile can run several sequential lanes for the same
+backend user.
 
 **add:** one item per chunk of each turn's content, `delay = uniform(0,
 think)` (default 0.05). Each item preserves the enclosing turn's `user` or
@@ -232,16 +235,24 @@ uses):
   each pass starts cleanly). Models the user reading the prior reply and
   typing the next utterance.
 
-Both apply **uniformly to all users** — the same mean for every user. (A
-per-user ratio for finer control is a planned follow-up.) With both at 0,
-chat-replay reproduces the original tight `search → add → search → add` loop;
-raising them spreads the load out, lowering concurrency toward a realistic
-chatbot session shape.
+Without a chat profile both apply uniformly to all users. A profile can
+override them per group. With both at 0, chat-replay reproduces the original
+tight `search → add → search → add` loop; raising them spreads the load out,
+lowering concurrency toward a realistic chatbot session shape.
 
 **Dataset requirement:** the dataset must expose `turn_stream` (LongMemEval
-does; synthetic does not). The runner validates this before the run and
-raises loudly if it is missing — a chat-replay run against a dataset without
-dialogue structure fails immediately rather than silently.
+does; synthetic does not). Profiled runs additionally require
+`session_stream`, which preserves source-conversation boundaries. The runner
+validates these contracts before backend setup.
+
+**Profiled session controls:** `--chat-profile` assigns users to weighted
+groups. In the closed model, `concurrent_sessions` creates fixed lanes that
+partition the user's source conversations by stride. In the open model,
+`max_sessions_per_user` limits active arriving sessions without multiplying
+`--arrival-rate`; an arrival for a saturated user is rejected rather than
+reassigned. `summary.sessions` reports this admission separately from
+request-level queue rejection. Every lane for a user shares that user's LTM
+state, and `--global-concurrency` remains the final request cap.
 
 **Pre-ingest:** not needed — the user adds its own conversation as it goes
 and recalls against what it has stored so far.

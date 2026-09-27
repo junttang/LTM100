@@ -44,6 +44,15 @@ ltm100 run --config examples/memmachine.yaml \
     --output out/chat-replay
 ```
 
+Apply group-specific recall depth, timing, and closed-model session counts:
+
+```sh
+ltm100 run --config examples/memmachine.yaml \
+    --scenario chat-replay --chat-profile examples/chat-profile.yaml \
+    --users 100 --duration 60 --seed 0 \
+    --global-concurrency 100 --output out/chat-replay-profiled
+```
+
 Run the same workload with arrival-driven sessions:
 
 ```sh
@@ -53,6 +62,40 @@ ltm100 run --config examples/memmachine.yaml \
     --global-concurrency 8 --queue-bound 4 \
     --output out/chat-replay-open
 ```
+
+Adding the same profile gives each group a distinct
+`max_sessions_per_user` admission cap without changing `--arrival-rate`:
+
+```sh
+ltm100 run --config examples/memmachine.yaml \
+    --scenario chat-replay --chat-profile examples/chat-profile.yaml \
+    --users 100 --duration 30 --seed 0 \
+    --model open --arrival-rate 20 --session-ops 12 \
+    --global-concurrency 40 --queue-bound 20 \
+    --output out/chat-replay-open-profiled
+```
+
+### Chat workload profiles
+
+`--chat-profile PATH` is valid only with `chat-replay`. The versioned YAML
+assigns whole users to weighted groups after a seeded shuffle. Largest-
+remainder allocation makes group counts sum exactly to `--users`; assignments
+are resolved before process sharding, so `--procs` does not change them.
+
+Group fields override `defaults`, which override the corresponding CLI values:
+
+- `think`, `search_every`, `answer_time`, `user_gap`, and `top_k` shape each
+  group's conversation operations.
+- `concurrent_sessions` is closed-model only. It creates that many fixed,
+  sequential conversation lanes for each user.
+- `max_sessions_per_user` is open-model only. It caps active Poisson-arriving
+  sessions for each user; omitting it leaves session admission uncapped.
+
+All lanes for one user share the same backend tenant and memories. LongMemEval
+`haystack_sessions` are distributed without overlap across the user's lanes;
+the run fails before backend setup when a configured lane count exceeds the
+available source conversations. `--global-concurrency` remains the final cap
+on simultaneous backend requests under either model.
 
 ### Add throughput
 
@@ -153,6 +196,8 @@ ltm100 run --config examples/memmachine.yaml \
 - `--search-every N`: recall cadence in `chat-replay`.
 - `--answer-time SECONDS`: mean LLM answer delay in `chat-replay`.
 - `--user-gap SECONDS`: mean user reading/typing delay in `chat-replay`.
+- `--chat-profile PATH`: group-specific `chat-replay` parameters and session
+  controls.
 - `--server-metrics`: collect backend-provided server latency metrics.
 - `--raw`: write per-request `raw.ndjson`.
 - `--no-delete-on-exit`: preserve per-run backend state.
@@ -202,9 +247,14 @@ With `--output DIR`, LTM100 writes:
   `throughput_ops_s`, `qps`, and latency percentiles contain successful
   requests only. Search `items.empty_rate` is the fraction of successful
   searches returning no items.
+  Profiled open-model runs also contain `summary.sessions` with offered,
+  admitted, rejected, and rejection-rate counters overall and by group. These
+  are session arrivals, separate from request-level queue rejection fields.
 - `summary.csv`: flattened summary rows. The overall row omits mixed-operation
   latency because combining add and search latency is ambiguous.
 - `raw.ndjson`: per-request records when `--raw` is enabled.
+  Profiled records include `group` and `session_id`; the latter identifies a
+  reusable per-user conversation lane, not a backend isolation key.
 - `server_metrics.csv` and `server_metrics_raw.json`: server-side latency
   deltas when `--server-metrics` is enabled and supported by the adapter.
 

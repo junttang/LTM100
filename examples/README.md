@@ -10,10 +10,16 @@ backend. The dataset determines whether `chat-replay` is available.
 | `memmachine-mcp.yaml` | LongMemEval | MemMachine MCP | `chat-replay` |
 | `mem0.yaml` | Synthetic | Mem0 REST | `add-load`, `search-load`, `mixed` |
 | `shared-project.yaml` | Synthetic | MemMachine REST | Isolation-scope `add-load`, `search-load`, or `mixed` |
+| `chat-profile.yaml` | Chat workload profile | Used with a LongMemEval config | Group-specific `chat-replay` load |
 
 `chat-replay` requires a dataset with structured dialogue turns. The two
 `memmachine*.yaml` files use LongMemEval for this purpose. Synthetic
 configurations fail validation if paired with `chat-replay`.
+
+`chat-profile.yaml` is an optional second YAML passed with
+`--chat-profile examples/chat-profile.yaml`. It assigns users deterministically
+to standard, power, and intensive groups. `concurrent_sessions` controls fixed
+closed-model lanes; `max_sessions_per_user` caps active open-model sessions.
 
 For `search-load`, use `--preingest` so the measured search begins with a
 populated corpus. The same is recommended for `mixed` when searches should be

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 import yaml
@@ -242,6 +243,25 @@ def test_profile_accepts_open_session_caps(tmp_path):
     settings = profile.groups[0].settings
     assert settings.max_sessions_per_user == 5
     assert profile.metadata(10)["groups"][0]["max_sessions_per_user"] == 5
+
+
+def test_bundled_chat_profile_has_expected_tiers():
+    path = Path(__file__).parents[1] / "examples" / "chat-profile.yaml"
+    profile = _load(str(path))
+
+    assert [group.name for group in profile.groups] == [
+        "standard",
+        "power",
+        "intensive",
+    ]
+    assert [group.settings.top_k for group in profile.groups] == [20, 50, 100]
+    assert [
+        group.settings.concurrent_sessions for group in profile.groups
+    ] == [1, 2, 5]
+    assert [
+        group.settings.max_sessions_per_user for group in profile.groups
+    ] == [1, 2, 5]
+    assert profile.counts(100) == [80, 15, 5]
 
 
 @pytest.mark.parametrize(

@@ -24,13 +24,12 @@ closed` and `--model open`.
 A fixed pool of `--users N` virtual users, each an asyncio coroutine that
 loops the scenario plan back-to-back:
 
-- **Per-user in-flight = 1.** A user sends one request, *waits for the
-  response*, then sends the next. A single user never has more than one
-  request in flight.
-- **Concurrency = min(N, `--global-concurrency`)** (N if no cap). Because
-  each user blocks on its response, a slow server makes all N stall together
-  and a fast one lets all N run — response time feeds back into concurrency
-  (a *closed* loop).
+- **Per-session in-flight = 1.** A session lane sends one request, *waits for
+  the response*, then sends the next. Ordinary workloads use one lane per
+  user; profiled `chat-replay` can create several lanes sharing one user.
+- **Concurrency = min(session lanes, `--global-concurrency`)** (all lanes if
+  no cap). Because each lane blocks on its response, service time feeds back
+  into concurrency (a *closed* loop).
 - **`N` is the concurrent user count.** `--users 20` models "20 users always
   connected".
 - **Think time** (`Op.delay`) is the only timing variation. `delay=0`
@@ -43,7 +42,7 @@ concurrency.
 
 ## Open model (`--model open`)
 
-Users *arrive* over time and each runs a short session then leaves:
+Sessions *arrive* over time, run a bounded slice, then leave:
 
 - **Arrival process (runner-owned).** A Poisson process spawns sessions at
   `--arrival-rate λ`. Inter-arrival is `expovariate(λ)` — bursty but with a
@@ -92,15 +91,29 @@ successful, and rejected rates. Rejection rate is rejected / offered, while
 error rate is backend errors / accepted. Service-latency percentiles contain
 successful requests only, so zero-time rejections cannot lower p50 or p99.
 
+### Profiled chat-session admission
+
+`chat-replay` profiles add an earlier, session-level admission layer through
+`max_sessions_per_user`. Each Poisson arrival is first assigned to its intended
+user round-robin. If that user already has the configured number of active
+chat sessions, the session is rejected; it is never moved to another tenant,
+and `--arrival-rate` is not multiplied. An admitted session occupies one
+reusable source-conversation lane until it finishes its `--session-ops` slice.
+
+Session admission appears under `summary.sessions` overall and by workload
+group. It is intentionally separate from request rejection: admitted sessions'
+individual operations still pass through `--global-concurrency` and
+`--queue-bound`.
+
 ## Same scenario, two models — chat-replay example
 
 | | `chat-replay --model closed` | `chat-replay --model open` |
 | --- | --- | --- |
 | users | N always connected | sessions drawn from the pool, then leave |
 | per-user lifetime | forever (dialogue wraps) | `--session-ops` ops per session |
-| concurrency | N (fixed) | emergent (arrival vs service rate) |
+| concurrency | configured session lanes | emergent (arrival vs service rate and optional per-user caps) |
 | timing | think time only | Poisson arrival + think |
-| rejections | none | `queue_full` rejections possible |
+| rejections | none | session-admission and `queue_full` rejections possible |
 | models reality | "20 chat windows kept open" | "customers starting support chats at random" |
 
 Both consume the *same* `plan()` — recall order, add content, and

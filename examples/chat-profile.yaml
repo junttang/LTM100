@@ -1,0 +1,31 @@
+# Optional user-group profile for --scenario chat-replay.
+#
+# concurrent_sessions applies to the closed model: fixed chat lanes per user.
+# max_sessions_per_user applies to the open model: an admission cap for
+# Poisson-arriving sessions. Both share the same backend user and LTM state.
+version: 1
+
+defaults:
+  think: 0.05
+  search_every: 1
+  answer_time: 2.0
+  user_gap: 3.0
+
+groups:
+  - name: standard
+    share: 0.80
+    top_k: 20
+    concurrent_sessions: 1
+    max_sessions_per_user: 1
+
+  - name: power
+    share: 0.15
+    top_k: 50
+    concurrent_sessions: 2
+    max_sessions_per_user: 2
+
+  - name: intensive
+    share: 0.05
+    top_k: 100
+    concurrent_sessions: 5
+    max_sessions_per_user: 5

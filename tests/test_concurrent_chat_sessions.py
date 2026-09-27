@@ -265,6 +265,30 @@ async def test_open_session_cap_must_fit_available_source_conversations():
 
 
 @pytest.mark.asyncio
+async def test_warmup_session_admission_is_excluded_from_measured_stats():
+    async def run(warmup: float):
+        runner = LoadRunner(
+            client=ConcurrentBackend(delay=0.005),
+            dataset=SessionDataset(sessions=2),
+            scenario=ChatReplay(
+                profile=_profile(1, max_sessions_per_user=1)
+            ),
+            config=RunConfig(
+                users=1,
+                duration=0.04,
+                warmup=warmup,
+                model="open",
+                arrival_rate=500.0,
+                session_ops=30,
+            ),
+        )
+        await runner.run()
+        return runner.session_stats.as_dict()
+
+    assert await run(0.03) == await run(0.0)
+
+
+@pytest.mark.asyncio
 async def test_warmup_does_not_consume_concurrent_session_operation_budget():
     backend = ConcurrentBackend(delay=0.002)
     runner = LoadRunner(

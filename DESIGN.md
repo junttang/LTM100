@@ -212,19 +212,22 @@ Hybrid: both **closed** and **open** models are supported, sharing one runner.
 
 ### 5.1 Closed model (load test) — implemented first
 
-- Fixed `N` concurrent virtual users (asyncio tasks), each looping:
+- Fixed `N` virtual users, each with one or more session lanes looping:
   emit request → await response → (optional think time) → next request.
-- Per-user **in-flight = 1** by default (sequential within a user).
-  Expandable to per-user in-flight > 1 later; behind a parameter.
+- Per-session **in-flight = 1**. Profiled `chat-replay` supports group-specific
+  `concurrent_sessions`; lanes remain sequential and share the backend user.
 - Optional **global concurrency cap** (`asyncio.Semaphore(K)`) to test "max
   concurrency K" load independent of N.
 
 ### 5.2 Open model (mixed) — implemented second
 
-- Users arrive over time per an arrival process (Poisson by default, custom
+- Sessions arrive over time per an arrival process (Poisson by default, custom
   inter-arrival distributions pluggable).
-- Each user performs a bounded number of ops then leaves.
+- Each session performs a bounded number of ops then leaves.
 - Concurrency is a *result* of arrival rate vs. service rate, not fixed.
+- Profiled `chat-replay` may cap active sessions per user through
+  `max_sessions_per_user`; saturated-user arrivals are rejected without
+  changing the configured arrival rate.
 - **Congestion policy** (decided at implementation): when arrival rate
   exceeds server capacity, define a bounded queue / rejection, and record
   rejections + queue depth as metrics. No silent dropping.
@@ -515,8 +518,8 @@ or check delete response status, not trust an immediate list.
 Resolved during implementation:
 - Async signatures: `Protocol` for `LTMClient` / `DatasetAdapter` / `Transport`;
   concrete classes (`MemMachineClient`, `LongMemEvalAdapter`, `RestTransport`).
-- Per-user in-flight = 1 is enforced in the runner; >1 is a future runner
-  parameter (not Scenario-level).
+- Per-session in-flight = 1 is enforced in the runner. Profiled chat users may
+  own several closed-model lanes or dynamically admitted open-model lanes.
 - NDJSON raw format: per-request `{op_type, user_id, started_at, ended_at,
   latency_ms, status, error_kind, n_items}`.
 - **Warm-up pre-ingest** (§8 step 4): the runner pre-ingests each user's
@@ -549,20 +552,17 @@ Resolved during implementation:
   (`answer_time`) and the user's think/typing time (`user_gap`) as
   Exponential-mean delays attached before the following assistant add and
   the next user op, respectively, defaulting to 0 (back-to-back). Search depth
-  is configurable via `top_k` (default 20). All applied uniformly to every
-  user for now.
+  is configurable via `top_k` (default 20). A versioned chat profile assigns
+  weighted user groups with overrides for timing, recall cadence/depth,
+  closed-model `concurrent_sessions`, and open-model
+  `max_sessions_per_user`. Source conversation boundaries remain intact;
+  request and session admission metrics remain separate.
 - **mixed think timing**: both ADD and SEARCH operations receive
   `uniform(0, think)` delay. ADD delay uses a separate seeded RNG stream so
   enabling it does not change the established add/search operation mix.
 
-Still open / next work (priority order):
-1. **Per-user in-flight > 1** — currently fixed at 1 in the runner; make it a
-   runner parameter so peak-concurrency measurement is not capped at N.
-2. **Per-user-group finer control** — define user groups with their own
-   `answer_time`/`user_gap`/`top_k` and a per-group user ratio, plus a
-   per-user (or per-group) duration / "aggressiveness" knob. (Implement
-   after the new timing/top_k params are validated to move load on a live
-   server.)
+Still open / next work is tracked in GitHub issues rather than duplicated in
+this design document.
 3. **Configurable memory types** — replace the REST adapter's hardcoded
    episodic-only `types` with a config option (semantic adds LLM background
    processing load). The MCP transport is already all-types by the tool's
