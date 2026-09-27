@@ -18,13 +18,25 @@ from __future__ import annotations
 
 import multiprocessing as mp
 from collections.abc import Callable
+from dataclasses import dataclass
 from queue import Empty
 from typing import Any
 
 from ltm100.core.op import OpResult
+from ltm100.core.runner import SessionAdmissionStats
+
+
+@dataclass
+class ShardResult:
+    """Measured request results and open-session admission counters."""
+
+    results: list[OpResult]
+    sessions: SessionAdmissionStats
+
 
 # Set by the parent before spawning; the child rebuilds its own run from it.
-_ShardEntry = Callable[[dict[str, Any], int], list[OpResult]]
+_ShardPayload = list[OpResult] | ShardResult
+_ShardEntry = Callable[[dict[str, Any], int], _ShardPayload]
 _worker_measure_sync: dict[str, Any] | None = None
 
 
@@ -35,7 +47,7 @@ def _init_worker(measure_sync: dict[str, Any] | None) -> None:
 
 def _run_entry(
     entry: _ShardEntry, args: dict[str, Any], proc_index: int
-) -> list[OpResult]:
+) -> _ShardPayload:
     worker_args = dict(args)
     if _worker_measure_sync is not None:
         worker_args["_measure_sync"] = _worker_measure_sync
@@ -49,11 +61,12 @@ def run_shards(
     *,
     on_measure_start: Callable[[], None] | None = None,
     on_measure_end: Callable[[], None] | None = None,
-) -> list[OpResult]:
+) -> _ShardPayload:
     """Run `procs` shards concurrently and return their pooled raw results.
 
-    `entry(args, proc_index)` must build and run one shard, returning its raw
-    OpResults. It runs in a spawned child, so it has to be importable by name.
+    `entry(args, proc_index)` must build and run one shard, returning either
+    raw OpResults or a ShardResult with session admission counters. It runs in
+    a spawned child, so it has to be importable by name.
     """
     if procs == 1:
         return entry(args, 0)
@@ -94,6 +107,26 @@ def run_shards(
 
         parts = pending.get()
 
+    if parts and isinstance(parts[0], ShardResult):
+        pooled_results: list[OpResult] = []
+        pooled_sessions = SessionAdmissionStats()
+        for part in parts:
+            pooled_results.extend(part.results)
+            pooled_sessions.offered += part.sessions.offered
+            pooled_sessions.admitted += part.sessions.admitted
+            pooled_sessions.rejected += part.sessions.rejected
+            if part.sessions.by_group:
+                if pooled_sessions.by_group is None:
+                    pooled_sessions.by_group = {}
+                for group, counts in part.sessions.by_group.items():
+                    target = pooled_sessions.by_group.setdefault(
+                        group, type(counts)()
+                    )
+                    target.offered += counts.offered
+                    target.admitted += counts.admitted
+                    target.rejected += counts.rejected
+        return ShardResult(pooled_results, pooled_sessions)
+
     pooled: list[OpResult] = []
     for part in parts:
         pooled.extend(part)
@@ -127,4 +160,4 @@ def _wait_for_workers(queue, stage: str, procs: int, pending) -> None:
             arrived.add(index)
 
 
-__all__ = ["run_shards"]
+__all__ = ["ShardResult", "run_shards"]

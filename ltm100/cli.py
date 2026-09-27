@@ -22,7 +22,7 @@ from typing import Any
 from ltm100.config import build_backend, build_dataset, load_config
 from ltm100.core.chat_profile import load_chat_profile
 from ltm100.core.config import RunConfig
-from ltm100.core.multiproc import run_shards
+from ltm100.core.multiproc import ShardResult, run_shards
 from ltm100.core.runner import LoadRunner
 from ltm100.core.scenarios import get_scenario
 from ltm100.metrics.aggregate import aggregate
@@ -116,7 +116,7 @@ def _build_scenario(args: argparse.Namespace):
     return get_scenario(args.scenario, **kwargs)
 
 
-async def _run_shard_async(args: argparse.Namespace) -> list:
+async def _run_shard_async(args: argparse.Namespace) -> ShardResult:
     cfg = load_config(args.config)
     dataset = build_dataset(cfg.dataset)
     backend = build_backend(cfg.backend)
@@ -164,7 +164,7 @@ async def _run_shard_async(args: argparse.Namespace) -> list:
         if run_cfg.delete_on_exit:
             # Each shard owns the users it drove, so it tears down its own.
             await backend.teardown(runner.users, delete=True)
-    return runner.recorder.raw()
+    return ShardResult(runner.recorder.raw(), runner.session_stats)
 
 
 def _shard_entry(args_dict: dict, proc_index: int) -> list:
@@ -392,7 +392,7 @@ def _run(args: argparse.Namespace) -> int:
             collector is not None or run_cfg.warmup > 0
         )
         if synchronize_workers:
-            raw = run_shards(
+            shard_result = run_shards(
                 _shard_entry,
                 vars(args),
                 run_cfg.procs,
@@ -408,7 +408,7 @@ def _run(args: argparse.Namespace) -> int:
                 ),
             )
         else:
-            raw = run_shards(_shard_entry, vars(args), run_cfg.procs)
+            shard_result = run_shards(_shard_entry, vars(args), run_cfg.procs)
         ended_at = datetime.now(timezone.utc)
     finally:
         _server_metrics_collector = None
@@ -416,7 +416,15 @@ def _run(args: argparse.Namespace) -> int:
     if collector is not None:
         server_metrics = finish(collector.result(), window="measured")
 
+    if isinstance(shard_result, ShardResult):
+        raw = shard_result.results
+        session_stats = shard_result.sessions
+    else:  # compatibility with integrations that wrap run_shards
+        raw = shard_result
+        session_stats = None
     summary = aggregate(raw)
+    if args.model == "open" and session_stats is not None:
+        summary["sessions"] = session_stats.as_dict()
 
     meta = _run_metadata(
         args,

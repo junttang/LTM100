@@ -81,7 +81,12 @@ class ConcurrentBackend:
         return
 
 
-def _profile(concurrent_sessions: int, *, top_k: int = 20) -> ChatProfile:
+def _profile(
+    concurrent_sessions: int,
+    *,
+    top_k: int = 20,
+    max_sessions_per_user: int | None = None,
+) -> ChatProfile:
     return ChatProfile(
         [
             ChatGroup(
@@ -94,6 +99,7 @@ def _profile(concurrent_sessions: int, *, top_k: int = 20) -> ChatProfile:
                     user_gap=0.0,
                     top_k=top_k,
                     concurrent_sessions=concurrent_sessions,
+                    max_sessions_per_user=max_sessions_per_user,
                 ),
             )
         ]
@@ -207,11 +213,43 @@ async def test_insufficient_source_sessions_fail_before_backend_setup():
 
 
 @pytest.mark.asyncio
-async def test_open_model_rejects_profiled_concurrent_sessions():
+async def test_open_model_uses_separate_per_user_session_cap():
     runner = LoadRunner(
-        client=ConcurrentBackend(),
+        client=ConcurrentBackend(delay=0.01),
         dataset=SessionDataset(sessions=5),
-        scenario=ChatReplay(profile=_profile(2)),
+        scenario=ChatReplay(
+            profile=_profile(5, max_sessions_per_user=2)
+        ),
+        config=RunConfig(
+            users=1,
+            duration=0.05,
+            model="open",
+            arrival_rate=1000.0,
+            session_ops=30,
+        ),
+    )
+
+    results = await runner.run()
+
+    assert runner.session_stats.offered > 2
+    assert runner.session_stats.admitted == 2
+    assert runner.session_stats.rejected == runner.session_stats.offered - 2
+    assert {result.session_id for result in results} <= {0, 1}
+    group_stats = runner.session_stats.as_dict()["by_group"]["test"]
+    assert group_stats["offered"] == runner.session_stats.offered
+    assert group_stats["admitted"] == runner.session_stats.admitted
+    assert group_stats["rejected"] == runner.session_stats.rejected
+
+
+@pytest.mark.asyncio
+async def test_open_session_cap_must_fit_available_source_conversations():
+    backend = ConcurrentBackend()
+    runner = LoadRunner(
+        client=backend,
+        dataset=SessionDataset(sessions=2),
+        scenario=ChatReplay(
+            profile=_profile(1, max_sessions_per_user=3)
+        ),
         config=RunConfig(
             users=1,
             duration=0.1,
@@ -221,8 +259,9 @@ async def test_open_model_rejects_profiled_concurrent_sessions():
         ),
     )
 
-    with pytest.raises(ValueError, match="requires the closed load model"):
+    with pytest.raises(ValueError, match="provides only 2"):
         await runner.run()
+    assert backend.setup_called is False
 
 
 @pytest.mark.asyncio

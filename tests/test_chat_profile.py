@@ -222,6 +222,28 @@ def test_profile_accepts_concurrent_session_counts(tmp_path):
     assert profile.metadata(10)["groups"][0]["concurrent_sessions"] == 5
 
 
+def test_profile_accepts_open_session_caps(tmp_path):
+    profile = _load(
+        _write_profile(
+            tmp_path,
+            {
+                "version": 1,
+                "groups": [
+                    {
+                        "name": "intensive",
+                        "share": 1.0,
+                        "max_sessions_per_user": 5,
+                    }
+                ],
+            },
+        )
+    )
+
+    settings = profile.groups[0].settings
+    assert settings.max_sessions_per_user == 5
+    assert profile.metadata(10)["groups"][0]["max_sessions_per_user"] == 5
+
+
 @pytest.mark.parametrize(
     ("change", "message"),
     [

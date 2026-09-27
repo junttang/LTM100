@@ -275,10 +275,11 @@ class ChatReplay:
     driven by the conversation itself. `query_stream` is not used.
 
     Requires a dataset adapter that implements `turn_stream` (LongMemEval
-    does); the run fails loudly at validation time otherwise. A profiled closed
-    run additionally uses `session_stream` to preserve source conversation
-    boundaries while running the configured number of sessions concurrently.
-    Each session lane remains sequential and shares the same backend user.
+    does); the run fails loudly at validation time otherwise. Profiled runs
+    additionally use `session_stream` to preserve source conversation
+    boundaries. Closed runs create `concurrent_sessions` fixed lanes per user;
+    open runs admit arriving sessions into at most `max_sessions_per_user`
+    lanes. Each lane remains sequential and shares the same backend user.
     Streams wrap until the runner stops them. A small `think` delay between ops
     mimics user/assistant think time so users drift out of lockstep.
 
@@ -364,31 +365,36 @@ class ChatReplay:
         self.validate(dataset)
         if self.profile is None:
             return
-        if model == "open":
-            concurrent = [
-                user
-                for user in users
-                if self._settings_for(user).concurrent_sessions > 1
-            ]
-            if concurrent:
-                raise ValueError(
-                    "chat profile concurrent_sessions > 1 requires the closed "
-                    "load model; open-model arrivals already create sessions"
-                )
-            return
         if not hasattr(dataset, "session_stream"):
             raise ValueError(
                 "profiled chat-replay requires a dataset with session_stream "
                 "so conversation boundaries can be preserved"
             )
         for user in users:
-            required = self._settings_for(user).concurrent_sessions
+            settings = self._settings_for(user)
+            required = (
+                settings.max_sessions_per_user
+                if model == "open"
+                else settings.concurrent_sessions
+            )
+            if required is None:
+                continue
             available = len(self._sessions(user, dataset))
             if available < required:
                 raise ValueError(
                     f"chat profile assigns {required} concurrent session(s) to "
                     f"user {user!r}, but the dataset provides only {available}"
                 )
+
+    def max_sessions_per_user(self, user: UserId) -> int | None:
+        """Return the open-model session cap configured for ``user``."""
+        if self.profile is None:
+            return None
+        return self._settings_for(user).max_sessions_per_user
+
+    def session_group(self, user: UserId) -> str:
+        """Return the reporting group for an arriving open-model session."""
+        return self.profile.group_for(user).name if self.profile else ""
 
     def session_ids(self, user: UserId) -> list[int | None]:
         if self.profile is None:
@@ -425,7 +431,9 @@ class ChatReplay:
                 )
         else:
             sessions = self._sessions(user, dataset)
-            session_count = settings.concurrent_sessions
+            session_count = rng_state.get(
+                "session_count", settings.concurrent_sessions
+            )
             assigned = sessions[session_id::session_count]
             if not assigned:
                 return

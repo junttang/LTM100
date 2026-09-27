@@ -40,7 +40,7 @@ class RunConfig:
     # per a Poisson process, run a bounded session, then leave).
     model: str = "closed"
     # Open-model params (ignored when model == "closed"):
-    #   arrival_rate  - user arrivals per second (Poisson lambda)
+    #   arrival_rate  - session arrivals per second (Poisson lambda)
     #   session_ops  - ops each arriving user performs before leaving
     #   queue_bound  - max requests queued beyond the global concurrency cap
     #                  before rejection (0 = reject immediately on cap)

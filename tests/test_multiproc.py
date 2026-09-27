@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import time
 
-from ltm100.core.multiproc import run_shards
+from ltm100.core.multiproc import ShardResult, run_shards
 from ltm100.core.op import OpResult, OpType
+from ltm100.core.runner import SessionAdmissionStats
 
 
 def _synchronized_entry(args: dict, proc_index: int) -> list[OpResult]:
@@ -28,6 +29,16 @@ def _synchronized_entry(args: dict, proc_index: int) -> list[OpResult]:
     ]
 
 
+def _session_stats_entry(args: dict, proc_index: int) -> ShardResult:
+    stats = SessionAdmissionStats()
+    for _ in range(proc_index + 1):
+        stats.record("offered", "group-a")
+        stats.record("admitted", "group-a")
+    stats.record("offered", "group-b")
+    stats.record("rejected", "group-b")
+    return ShardResult([], stats)
+
+
 def test_parent_hooks_bracket_every_shards_measured_window():
     boundaries: dict[str, float] = {}
 
@@ -42,3 +53,29 @@ def test_parent_hooks_bracket_every_shards_measured_window():
     assert len(results) == 2
     assert all(result.started_at >= boundaries["start"] for result in results)
     assert all(result.ended_at <= boundaries["end"] for result in results)
+
+
+def test_session_admission_stats_are_pooled_across_shards():
+    result = run_shards(_session_stats_entry, {}, 2)
+
+    assert isinstance(result, ShardResult)
+    assert result.sessions.as_dict() == {
+        "offered": 5,
+        "admitted": 3,
+        "rejected": 2,
+        "rejection_rate": 0.4,
+        "by_group": {
+            "group-a": {
+                "offered": 3,
+                "admitted": 3,
+                "rejected": 0,
+                "rejection_rate": 0.0,
+            },
+            "group-b": {
+                "offered": 2,
+                "admitted": 0,
+                "rejected": 2,
+                "rejection_rate": 1.0,
+            },
+        },
+    }

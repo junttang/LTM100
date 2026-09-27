@@ -19,6 +19,7 @@ _SETTING_KEYS = {
     "user_gap",
     "top_k",
     "concurrent_sessions",
+    "max_sessions_per_user",
 }
 
 
@@ -30,6 +31,7 @@ class ChatSettings:
     user_gap: float
     top_k: int
     concurrent_sessions: int = 1
+    max_sessions_per_user: int | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +133,7 @@ def load_chat_profile(
         "user_gap": user_gap,
         "top_k": top_k,
         "concurrent_sessions": 1,
+        "max_sessions_per_user": None,
     }
     defaults = _settings({**fallback, **defaults_raw}, "chat profile defaults")
 
@@ -174,6 +177,9 @@ def _settings(raw: dict[str, Any], where: str) -> ChatSettings:
     sessions = _positive_int(
         raw["concurrent_sessions"], f"{where}.concurrent_sessions"
     )
+    max_sessions = _optional_positive_int(
+        raw["max_sessions_per_user"], f"{where}.max_sessions_per_user"
+    )
     if think < 0:
         raise ValueError(f"{where}.think must be >= 0")
     if answer_time < 0:
@@ -187,6 +193,7 @@ def _settings(raw: dict[str, Any], where: str) -> ChatSettings:
         user_gap=user_gap,
         top_k=top_k,
         concurrent_sessions=sessions,
+        max_sessions_per_user=max_sessions,
     )
 
 
@@ -202,6 +209,12 @@ def _positive_int(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{field} must be a positive integer")
     return value
+
+
+def _optional_positive_int(value: Any, field: str) -> int | None:
+    if value is None:
+        return None
+    return _positive_int(value, field)
 
 
 def _reject_unknown(raw: dict[str, Any], allowed: set[str], where: str) -> None:
