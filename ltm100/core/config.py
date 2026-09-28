@@ -32,6 +32,9 @@ class RunConfig:
     preingest: bool = False
     # Fraction of each user's memory stream to pre-ingest (1.0 = all).
     preingest_fraction: float = 1.0
+    # Exact number of input items to pre-ingest per user. When set, the
+    # runner consumes the stream incrementally instead of materializing it.
+    preingest_items_per_user: int | None = None
     # Ramp-up seconds over which users start (staggered, avoids thundering herd).
     rampup: float = 0.0
     # Delete per-user state on exit.
@@ -63,6 +66,18 @@ class RunConfig:
             raise ValueError("either duration or ops must be > 0")
         if self.warmup < 0:
             raise ValueError("warmup must be >= 0")
+        if (
+            self.preingest_items_per_user is not None
+            and self.preingest_items_per_user < 0
+        ):
+            raise ValueError("preingest_items_per_user must be >= 0")
+        if self.preingest_items_per_user is not None and not self.preingest:
+            raise ValueError("preingest_items_per_user requires preingest=True")
+        if self.preingest_items_per_user is not None and self.preingest_fraction != 1.0:
+            raise ValueError(
+                "preingest_items_per_user and a non-default "
+                "preingest_fraction are mutually exclusive"
+            )
         if self.users <= 0:
             raise ValueError("users must be > 0")
         if self.procs < 1:

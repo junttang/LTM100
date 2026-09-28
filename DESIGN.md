@@ -393,11 +393,13 @@ the run, and every histogram reported as the difference.
 1. **Load config** (YAML) — backend endpoint/auth, transport, adapter choices.
 2. **Resolve adapters** — dataset + LTM client (+ transport).
 3. **Provision** (`LTMClient.setup`) — per-user tenants created. (out of measure)
-4. **Optional pre-ingest** — fill each user's memories (a fraction of
-   `memory_stream`) before the workload; excluded from metrics. Enabled with
-   `--preingest` and `--preingest-fraction`; applied under the global
-   concurrency cap. A zero fraction is a no-op, and any ingestion failure
-   aborts the run before warm-up or measurement.
+4. **Optional pre-ingest** — fill each user's memories before the workload;
+   excluded from metrics. `--preingest-fraction` keeps the legacy fractional
+   mode, while `--preingest-items-per-user` incrementally consumes an exact
+   per-user prefix for large-corpus experiments. The modes are mutually
+   exclusive and run under the global concurrency cap. A zero size is a no-op,
+   a short stream or ingestion failure aborts before warm-up or measurement,
+   and the report records successfully submitted input-item counts.
 5. **Optional warm-up** — drive the selected workload for `--warmup` seconds
    against the real backend. Requests can update backend state but are not
    recorded and do not consume the measured duration or operation budget.
@@ -420,9 +422,10 @@ dataset adapter, LTM client adapter, defaults.
 
 **CLI** (per-run, changed often): `--users N`, `--scenario`, `--duration` /
 `--ops`, `--seed`, `--model`, `--global-concurrency`, `--warmup`, `--rampup`,
-`--preingest`, `--preingest-fraction`, `--arrival-rate`, `--session-ops`,
-`--queue-bound`, `--search-weight`, `--top-k`, `--think`, `--search-every`,
-`--answer-time`, `--user-gap`, `--expand`, `--filter`, `--procs`, `--raw`,
+`--preingest`, `--preingest-fraction`, `--preingest-items-per-user`,
+`--arrival-rate`, `--session-ops`, `--queue-bound`, `--search-weight`,
+`--top-k`, `--query-limit`, `--think`, `--search-every`, `--answer-time`,
+`--user-gap`, `--expand`, `--filter`, `--procs`, `--raw`,
 `--no-delete-on-exit`, `--output`. The MCP import is lazy, so `--help` works
 without the `[mcp]` extra. See `ltm100 run --help` for the authoritative list.
 

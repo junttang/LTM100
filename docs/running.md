@@ -121,6 +121,24 @@ ltm100 run --config examples/synthetic.yaml \
     --output out/search-load
 ```
 
+For a controlled memory-size point, pre-ingest an exact prefix and keep the
+query mix fixed independently of corpus size:
+
+```sh
+ltm100 run --config examples/synthetic.yaml \
+    --scenario search-load --users 1 --duration 30 --seed 0 \
+    --preingest --preingest-items-per-user 10000 --query-limit 1000 \
+    --top-k 20 --output out/search-10k
+```
+
+Set `dataset.memories_per_user` in the YAML to at least the largest requested
+count. Exact pre-ingest streams only the requested prefix; it does not
+materialize the complete per-user corpus in the load generator. `--query-limit`
+is valid only for `search-load` and requires that many source memories. Keeping
+it constant across runs prevents query-pool growth from becoming a confounding
+variable. These controls establish one memory-growth point; automated sweep
+orchestration is intentionally separate.
+
 ### Mixed open-model load
 
 `mixed` emits a configurable add/search ratio. Under the open model it is a
@@ -187,7 +205,12 @@ ltm100 run --config examples/memmachine.yaml \
 - `--arrival-rate F`, `--session-ops N`, `--queue-bound N`: open-model controls.
 - `--procs N`: number of load-generator processes.
 - `--rampup SECONDS`: stagger closed-model user startup.
-- `--preingest`, `--preingest-fraction F`: populate memory before measurement.
+- `--preingest`: populate memory before measurement.
+- `--preingest-fraction F`: ingest a fraction of each user's complete stream.
+- `--preingest-items-per-user N`: stream an exact input-item prefix per user;
+  mutually exclusive with `--preingest-fraction`.
+- `--query-limit N`: use an exact source-memory prefix as the `search-load`
+  query pool, independent of the stored corpus size.
 - `--top-k N`: search result count for search-capable scenarios.
 - `--expand N`: server-side context expansion, when supported.
 - `--filter EXPR`: server-side metadata filter, when supported.

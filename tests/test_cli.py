@@ -168,6 +168,97 @@ def test_cli_run_parses_open_model_args(tmp_path):
     assert scenario.search_weight == 0.9  # type: ignore[attr-defined]
 
 
+def test_cli_parses_memory_growth_controls(tmp_path):
+    from ltm100.cli import _build_run_config, _build_scenario
+
+    args = build_parser().parse_args(
+        [
+            "run",
+            "--config",
+            _write_config(tmp_path),
+            "--scenario",
+            "search-load",
+            "--ops",
+            "5",
+            "--preingest",
+            "--preingest-items-per-user",
+            "10000",
+            "--query-limit",
+            "250",
+        ]
+    )
+
+    assert _build_run_config(args).preingest_items_per_user == 10000
+    assert _build_scenario(args).query_limit == 250  # type: ignore[attr-defined]
+
+
+def test_cli_memory_growth_controls_validate_scope_and_exclusivity(tmp_path):
+    from ltm100.cli import _build_scenario
+
+    parser = build_parser()
+    common = ["run", "--config", _write_config(tmp_path), "--ops", "1"]
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                *common,
+                "--scenario",
+                "search-load",
+                "--preingest-fraction",
+                "0.5",
+                "--preingest-items-per-user",
+                "10",
+            ]
+        )
+
+    args = parser.parse_args([*common, "--scenario", "add-load", "--query-limit", "10"])
+    with pytest.raises(ValueError, match="only valid with.*search-load"):
+        _build_scenario(args)
+
+
+def test_memory_growth_values_appear_in_run_metadata(tmp_path):
+    from datetime import datetime, timezone
+
+    from ltm100.cli import _run_metadata
+
+    args = build_parser().parse_args(
+        [
+            "run",
+            "--config",
+            _write_config(tmp_path),
+            "--scenario",
+            "search-load",
+            "--ops",
+            "5",
+            "--preingest",
+            "--preingest-items-per-user",
+            "100",
+            "--query-limit",
+            "10",
+        ]
+    )
+    now = datetime.now(timezone.utc)
+
+    metadata = _run_metadata(
+        args,
+        dataset="longmemeval",
+        backend="memmachine",
+        build={},
+        started_at=now,
+        ended_at=now,
+        preingest_stats={
+            "users": 2,
+            "input_items": 200,
+            "min_items_per_user": 100,
+            "max_items_per_user": 100,
+        },
+    )
+
+    assert metadata["preingest_items_per_user"] == 100
+    assert metadata["preingest_fraction"] is None
+    assert metadata["query_limit"] == 10
+    assert metadata["preingest_stats"]["input_items"] == 200
+
+
 def test_cli_scenario_params_forwarded(tmp_path):
     parser = build_parser()
     from ltm100.cli import _build_scenario

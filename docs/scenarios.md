@@ -311,9 +311,11 @@ measured run, so **memory must already be present** (use `--preingest`).
 **search:** each query carries a small think time
 (`delay = uniform(0, 0.02)`) so users drift out of lockstep. The query pool
 is the user's own memory contents, cycled with a rotating per-pass start
-offset so passes are not identical. `top_k` comes from the `QueryItem`
-(set via `--top-k`, default 20); `expand_context`/`filter` come from
-`--expand`/`--filter` when set.
+offset so passes are not identical. `--query-limit N` fixes the pool to the
+first N source memories and validates that all users supply N items before
+backend setup. This is useful when stored memory grows but the query workload
+must remain comparable. `top_k` comes from the `QueryItem` (set via `--top-k`,
+default 20); `expand_context`/`filter` come from `--expand`/`--filter` when set.
 
 **add:** none during measurement.
 
@@ -321,7 +323,12 @@ offset so passes are not identical. `top_k` comes from the `QueryItem`
 before the measured run, under the global concurrency cap, ingesting a
 `--preingest-fraction` (default 1.0 = all) of each user's `memory_stream`.
 `0` ingests nothing. Pre-ingest is excluded from metrics; a backend failure
-aborts the run before measured requests begin.
+aborts the run before measured requests begin. Alternatively,
+`--preingest-items-per-user N` consumes exactly N items per user incrementally
+and fails if any stream is shorter. The two sizing flags are mutually
+exclusive. Reports record both the requested exact count and the successfully
+submitted input-item total; this count describes LTM100 inputs, not a backend's
+internal derived-record count.
 
 **Termination:** `--duration` or `--ops`.
 
