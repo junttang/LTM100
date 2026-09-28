@@ -74,6 +74,7 @@ def _build_run_config(args: argparse.Namespace) -> RunConfig:
         rampup=args.rampup,
         preingest=args.preingest,
         preingest_fraction=args.preingest_fraction,
+        preingest_items_per_user=args.preingest_items_per_user,
         model=args.model,
         arrival_rate=(args.arrival_rate / procs if procs > 1 else args.arrival_rate),
         session_ops=args.session_ops,
@@ -87,6 +88,8 @@ def _build_run_config(args: argparse.Namespace) -> RunConfig:
 def _build_scenario(args: argparse.Namespace):
     if args.chat_profile and args.scenario != "chat-replay":
         raise ValueError("--chat-profile is only valid with --scenario chat-replay")
+    if args.query_limit is not None and args.scenario != "search-load":
+        raise ValueError("--query-limit is only valid with --scenario search-load")
     kwargs: dict[str, Any] = {}
     if args.scenario == "mixed":
         kwargs["search_weight"] = args.search_weight
@@ -109,6 +112,7 @@ def _build_scenario(args: argparse.Namespace):
             )
     elif args.scenario == "search-load":
         kwargs["top_k"] = args.top_k
+        kwargs["query_limit"] = args.query_limit
     # Every scenario that searches takes the server-side search knobs.
     if args.scenario in ("mixed", "chat-replay", "search-load"):
         kwargs["expand_context"] = args.expand
@@ -164,7 +168,9 @@ async def _run_shard_async(args: argparse.Namespace) -> ShardResult:
         if run_cfg.delete_on_exit:
             # Each shard owns the users it drove, so it tears down its own.
             await backend.teardown(runner.users, delete=True)
-    return ShardResult(runner.recorder.raw(), runner.session_stats)
+    return ShardResult(
+        runner.recorder.raw(), runner.session_stats, runner.preingest_stats
+    )
 
 
 def _shard_entry(args_dict: dict, proc_index: int) -> list:
@@ -223,6 +229,7 @@ def _run_metadata(
     build: dict,
     started_at: datetime,
     ended_at: datetime,
+    preingest_stats: dict[str, int | None] | None = None,
 ) -> dict:
     """Describe the whole run, never an individual process shard."""
     meta = {
@@ -238,7 +245,12 @@ def _run_metadata(
         "warmup": args.warmup,
         "rampup": args.rampup,
         "preingest": args.preingest,
-        "preingest_fraction": args.preingest_fraction,
+        "preingest_fraction": (
+            args.preingest_fraction
+            if args.preingest_items_per_user is None
+            else None
+        ),
+        "preingest_items_per_user": args.preingest_items_per_user,
         "model": args.model,
         "procs": args.procs,
         "delete_on_exit": not args.no_delete_on_exit,
@@ -258,6 +270,10 @@ def _run_metadata(
             expand_context=args.expand,
             filter=args.filter,
         )
+    if args.scenario == "search-load":
+        meta["query_limit"] = args.query_limit
+    if args.preingest and preingest_stats is not None:
+        meta["preingest_stats"] = preingest_stats
     if args.scenario == "mixed":
         meta.update(search_weight=args.search_weight, think=args.think)
     elif args.scenario == "chat-replay":
@@ -419,9 +435,11 @@ def _run(args: argparse.Namespace) -> int:
     if isinstance(shard_result, ShardResult):
         raw = shard_result.results
         session_stats = shard_result.sessions
+        preingest_stats = shard_result.preingest
     else:  # compatibility with integrations that wrap run_shards
         raw = shard_result
         session_stats = None
+        preingest_stats = None
     summary = aggregate(raw)
     if args.model == "open" and session_stats is not None:
         summary["sessions"] = session_stats.as_dict()
@@ -433,6 +451,9 @@ def _run(args: argparse.Namespace) -> int:
         build=build,
         started_at=started_at,
         ended_at=ended_at,
+        preingest_stats=(
+            preingest_stats.as_dict() if preingest_stats is not None else None
+        ),
     )
 
     # The section's `raw` block is the full two-snapshot scrape: too big for
@@ -498,11 +519,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="unmeasured workload seconds before the measured run",
     )
     run.add_argument("--preingest", action="store_true", help="pre-ingest memories before run")
-    run.add_argument(
+    preingest_size = run.add_mutually_exclusive_group()
+    preingest_size.add_argument(
         "--preingest-fraction",
         type=float,
         default=1.0,
         help="fraction of each user's memories to pre-ingest",
+    )
+    preingest_size.add_argument(
+        "--preingest-items-per-user",
+        type=int,
+        default=None,
+        help="exact input items to pre-ingest per user; streams only the "
+        "requested prefix and is mutually exclusive with "
+        "--preingest-fraction",
     )
     run.add_argument("--rampup", type=float, default=0.0, help="ramp-up seconds")
     run.add_argument(
@@ -542,6 +572,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="search top_k: how many memories the backend returns per search "
         "(search-load, mixed, chat-replay; default 20). Applied uniformly to "
         "all users",
+    )
+    run.add_argument(
+        "--query-limit",
+        type=int,
+        default=None,
+        help="search-load: build each user's query pool from exactly the "
+        "first N dataset memories (default: entire memory stream)",
     )
     run.add_argument(
         "--think",

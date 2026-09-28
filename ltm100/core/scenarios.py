@@ -9,9 +9,10 @@ going idle once a finite stream is exhausted; the runner bounds consumption
 via duration/ops (closed) or session_ops (open).
 
 Search queries are **content-derived**: built from the user's own
-`memory_stream` items (one query per stored unit), so the query pool is as
-large as the memory stream and cycling it does not naively repeat a single
-query (which would warm a server result cache and understate latency).
+`memory_stream` items (one query per stored unit by default). `search-load`
+can bound that pool to a fixed prefix for comparable memory-growth runs;
+otherwise it is as large as the stream so cycling does not naively repeat a
+single query (which would warm a server result cache and understate latency).
 `chat-replay` instead derives each recall query from the upcoming user turn's
 content. No scenario consumes a separate evaluation `query_stream`.
 
@@ -33,6 +34,7 @@ from __future__ import annotations
 import random
 from collections.abc import Iterator
 from dataclasses import replace
+from itertools import islice
 from typing import Any
 from weakref import WeakKeyDictionary
 
@@ -69,12 +71,24 @@ def _query_pool(scenario: Any, dataset: DatasetAdapter, user: UserId) -> list[Qu
     `_content_queries` builds one QueryItem per stored unit, so rebuilding it
     per session costs the same order as the corpus build itself (see
     `_memories`). The pool depends only on the user and the scenario's fixed
-    top_k/expand_context/filter."""
+    top_k/expand_context/filter/query_limit. A bounded pool consumes only its
+    prefix instead of materializing the complete corpus."""
     cache = scenario.__dict__.setdefault("_query_cache", {})
     pool = cache.get(user)
     if pool is None:
+        limit = getattr(scenario, "query_limit", None)
+        if limit is None:
+            memories = _memories(dataset, user)
+        else:
+            memories = list(islice(dataset.memory_stream(user), limit))
+            if len(memories) < limit:
+                raise ValueError(
+                    f"query_limit={limit} requires at least {limit} memory "
+                    f"items for user {user!r}, but the dataset yielded "
+                    f"{len(memories)}"
+                )
         pool = cache[user] = _content_queries(
-            _memories(dataset, user),
+            memories,
             scenario.top_k,
             scenario.expand_context,
             scenario.filter,
@@ -143,24 +157,50 @@ class SearchLoad:
 
     Assumes memories were pre-ingested (warm-up), so searches run against the
     user's own stored content. The query pool is built from the user's
-    `memory_stream`; each pass through the pool starts at a rotating offset
-    so passes are not identical, and a small think time per op drifts users
-    out of lockstep. `top_k` (default 20) sets the search depth. The plan is
-    infinite; the runner bounds it via duration/ops (closed) or session_ops
+    `memory_stream`; `query_limit` can keep it at an exact prefix size while
+    the stored corpus grows. Each pass through the pool starts at a rotating
+    offset so passes are not identical, and a small think time per op drifts
+    users out of lockstep. `top_k` (default 20) sets the search depth. The plan
+    is infinite; the runner bounds it via duration/ops (closed) or session_ops
     (open)."""
 
     name = "search-load"
 
     def __init__(
-        self, top_k: int = 20, expand_context: int = 0, filter: str = ""
+        self,
+        top_k: int = 20,
+        expand_context: int = 0,
+        filter: str = "",
+        query_limit: int | None = None,
     ) -> None:
         if top_k <= 0:
             raise ValueError("top_k must be > 0")
         if expand_context < 0:
             raise ValueError("expand_context must be >= 0")
+        if query_limit is not None and query_limit <= 0:
+            raise ValueError("query_limit must be > 0")
         self.top_k = top_k
         self.expand_context = expand_context
         self.filter = filter
+        self.query_limit = query_limit
+
+    def validate_run(
+        self,
+        dataset: DatasetAdapter,
+        users: list[UserId],
+        *,
+        model: str,
+    ) -> None:
+        """Build bounded query pools before backend setup.
+
+        A configured limit is an exact workload contract: silently using a
+        smaller pool would make growth points incomparable. Validation also
+        keeps a short dataset error out of the asynchronous user loops, where
+        plan exceptions are otherwise collected as worker outcomes.
+        """
+        if self.query_limit is not None:
+            for user in users:
+                _query_pool(self, dataset, user)
 
     def plan(
         self,

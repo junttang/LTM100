@@ -216,6 +216,18 @@ def test_config_requires_termination():
         RunConfig(users=0, ops=1)
     with pytest.raises(ValueError, match="warmup must be >= 0"):
         RunConfig(users=1, ops=1, warmup=-1)
+    with pytest.raises(ValueError, match="preingest_items_per_user must be >= 0"):
+        RunConfig(users=1, ops=1, preingest=True, preingest_items_per_user=-1)
+    with pytest.raises(ValueError, match="requires preingest=True"):
+        RunConfig(users=1, ops=1, preingest_items_per_user=1)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        RunConfig(
+            users=1,
+            ops=1,
+            preingest=True,
+            preingest_fraction=0.5,
+            preingest_items_per_user=10,
+        )
 
 
 @pytest.mark.asyncio
@@ -299,6 +311,157 @@ async def test_preingest_fraction_limits_items():
     # ~10 of 100 memories ingested.
     total_items = sum(n for _, n in backend.adds)
     assert 5 <= total_items <= 15
+
+
+@pytest.mark.asyncio
+async def test_exact_preingest_streams_only_requested_prefix_in_batches():
+    class GuardedDataset(FakeDataset):
+        def __init__(self) -> None:
+            super().__init__(n_memories=100)
+            self.yielded = 0
+
+        def memory_stream(self, user):
+            for item in super().memory_stream(user):
+                self.yielded += 1
+                if self.yielded > 7:
+                    raise AssertionError("exact pre-ingest read past its prefix")
+                yield item
+
+    ds = GuardedDataset()
+    backend = FakeBackend()
+    backend.add_batch_size = 3
+    cfg = RunConfig(
+        users=1,
+        ops=2,
+        preingest=True,
+        preingest_items_per_user=7,
+    )
+    runner = LoadRunner(client=backend, dataset=ds, scenario=AddLoad(), config=cfg)
+
+    await runner._preingest(["u0"])
+
+    assert ds.yielded == 7
+    assert backend.adds == [("u0", 3), ("u0", 3), ("u0", 1)]
+    assert runner.preingest_stats.as_dict() == {
+        "users": 1,
+        "input_items": 7,
+        "min_items_per_user": 7,
+        "max_items_per_user": 7,
+    }
+
+
+@pytest.mark.asyncio
+async def test_exact_preingest_requires_the_requested_items_for_every_user():
+    ds = FakeDataset(n_memories=4)
+    backend = FakeBackend()
+    cfg = RunConfig(
+        users=2,
+        ops=2,
+        preingest=True,
+        preingest_items_per_user=5,
+    )
+    runner = LoadRunner(client=backend, dataset=ds, scenario=SearchLoad(), config=cfg)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"pre-ingest failed for 2 user\(s\).*requires at least 5.*yielded 4",
+    ):
+        await runner.run()
+
+    assert backend.searches == []
+    assert runner.preingest_stats.as_dict()["input_items"] == 0
+
+
+@pytest.mark.asyncio
+async def test_exact_zero_preingest_records_each_user_without_adding():
+    backend = FakeBackend()
+    runner = LoadRunner(
+        client=backend,
+        dataset=FakeDataset(n_memories=5),
+        scenario=SearchLoad(query_limit=2),
+        config=RunConfig(
+            users=2,
+            ops=2,
+            preingest=True,
+            preingest_items_per_user=0,
+        ),
+    )
+
+    await runner.run()
+
+    assert backend.adds == []
+    assert runner.preingest_stats.as_dict() == {
+        "users": 2,
+        "input_items": 0,
+        "min_items_per_user": 0,
+        "max_items_per_user": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_query_limit_keeps_a_fixed_prefix_pool():
+    ds = FakeDataset(n_memories=100)
+    backend = FakeBackend()
+    runner = LoadRunner(
+        client=backend,
+        dataset=ds,
+        scenario=SearchLoad(query_limit=3),
+        config=RunConfig(users=1, ops=9),
+    )
+
+    await runner.run()
+
+    assert len(backend.searches) == 9
+    assert {query for _, query in backend.searches} == {
+        "u0-mem-0",
+        "u0-mem-1",
+        "u0-mem-2",
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_query_limit_does_not_materialize_the_remaining_corpus():
+    class PrefixOnlyDataset(FakeDataset):
+        def memory_stream(self, user):
+            for i in range(3):
+                yield MemoryItem(content=f"{user}-mem-{i}", producer=user)
+            raise AssertionError("query pool read beyond query_limit")
+
+    backend = FakeBackend()
+    runner = LoadRunner(
+        client=backend,
+        dataset=PrefixOnlyDataset(),
+        scenario=SearchLoad(query_limit=3),
+        config=RunConfig(users=1, ops=3),
+    )
+
+    await runner.run()
+
+    assert len(backend.searches) == 3
+
+
+@pytest.mark.asyncio
+async def test_search_query_limit_shortage_fails_before_backend_setup():
+    class SetupCapture(FakeBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.setup_called = False
+
+        async def setup(self, users):
+            self.setup_called = True
+
+    backend = SetupCapture()
+    runner = LoadRunner(
+        client=backend,
+        dataset=FakeDataset(n_memories=2),
+        scenario=SearchLoad(query_limit=3),
+        config=RunConfig(users=1, ops=1),
+    )
+
+    with pytest.raises(ValueError, match=r"query_limit=3.*yielded 2"):
+        await runner.run()
+
+    assert backend.setup_called is False
 
 
 @pytest.mark.asyncio

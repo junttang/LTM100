@@ -27,6 +27,7 @@ import random
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from itertools import islice
 
 from ltm100.common import DatasetAdapter, LTMClient, UserId
 from ltm100.core.config import RunConfig
@@ -77,6 +78,50 @@ class SessionAdmissionStats(SessionCounts):
         return result
 
 
+@dataclass
+class PreingestStats:
+    """Successfully submitted input items from the unmeasured pre-ingest."""
+
+    users: int = 0
+    input_items: int = 0
+    min_items_per_user: int | None = None
+    max_items_per_user: int | None = None
+
+    def record(self, count: int) -> None:
+        self.users += 1
+        self.input_items += count
+        if self.min_items_per_user is None or count < self.min_items_per_user:
+            self.min_items_per_user = count
+        if self.max_items_per_user is None or count > self.max_items_per_user:
+            self.max_items_per_user = count
+
+    def merge(self, other: PreingestStats) -> None:
+        if other.users == 0:
+            return
+        assert other.min_items_per_user is not None
+        assert other.max_items_per_user is not None
+        self.users += other.users
+        self.input_items += other.input_items
+        if (
+            self.min_items_per_user is None
+            or other.min_items_per_user < self.min_items_per_user
+        ):
+            self.min_items_per_user = other.min_items_per_user
+        if (
+            self.max_items_per_user is None
+            or other.max_items_per_user > self.max_items_per_user
+        ):
+            self.max_items_per_user = other.max_items_per_user
+
+    def as_dict(self) -> dict[str, int | None]:
+        return {
+            "users": self.users,
+            "input_items": self.input_items,
+            "min_items_per_user": self.min_items_per_user,
+            "max_items_per_user": self.max_items_per_user,
+        }
+
+
 class LoadRunner:
     """Drives N virtual users through a Scenario against an LTMClient."""
 
@@ -107,6 +152,7 @@ class LoadRunner:
         self._start_time = 0.0
         self._record_results = True
         self.session_stats = SessionAdmissionStats()
+        self.preingest_stats = PreingestStats()
 
     async def run(self) -> list[OpResult]:
         all_users = self._configure_users(
@@ -414,29 +460,53 @@ class LoadRunner:
             self._admitted -= 1
 
     async def _preingest(self, users: list[UserId]) -> None:
-        """Ingest a fraction of each user's memory stream, concurrently across
-        users, with the global concurrency cap applied. Not recorded."""
-        frac = max(0.0, min(self.config.preingest_fraction, 1.0))
-        if frac == 0.0:
-            return
+        """Pre-ingest each user's corpus outside the measured result stream.
 
-        async def ingest_one(user: UserId) -> None:
+        The legacy fraction mode materializes a user's corpus because the
+        fraction depends on its final length. Exact-count mode consumes only
+        the requested prefix in batches, which keeps client memory bounded for
+        large memory-growth experiments.
+        """
+        frac = max(0.0, min(self.config.preingest_fraction, 1.0))
+        exact = self.config.preingest_items_per_user
+
+        async def ingest_one(user: UserId) -> int:
+            batch = getattr(self.client, "add_batch_size", 50)
+            if batch <= 0:
+                raise ValueError(f"add_batch_size must be > 0, got {batch}")
+
+            if exact is not None:
+                stream = iter(self.dataset.memory_stream(user))
+                submitted = 0
+                while submitted < exact:
+                    items = list(islice(stream, min(batch, exact - submitted)))
+                    if not items:
+                        raise ValueError(
+                            f"preingest_items_per_user={exact} requires at least "
+                            f"{exact} memory items for user {user!r}, but the "
+                            f"dataset yielded {submitted}"
+                        )
+                    await self.client.add(user, items)
+                    submitted += len(items)
+                return submitted
+
+            if frac == 0.0:
+                return 0
             items = list(self.dataset.memory_stream(user))
             if frac < 1.0:
                 keep = max(1, round(frac * len(items)))
                 items = items[:keep]
-            batch = getattr(self.client, "add_batch_size", 50)
             for start in range(0, len(items), batch):
                 await self.client.add(user, items[start : start + batch])
+            return len(items)
 
         sem = self._global_sem
 
-        async def guarded(user: UserId) -> None:
+        async def guarded(user: UserId) -> int:
             if sem is not None:
                 async with sem:
-                    await ingest_one(user)
-            else:
-                await ingest_one(user)
+                    return await ingest_one(user)
+            return await ingest_one(user)
 
         outcomes = await asyncio.gather(
             *[guarded(u) for u in users], return_exceptions=True
@@ -452,6 +522,9 @@ class LoadRunner:
                 f"pre-ingest failed for {len(failures)} user(s); first failure "
                 f"for {user}: {type(error).__name__}: {error}"
             ) from error
+        for outcome in outcomes:
+            assert isinstance(outcome, int)
+            self.preingest_stats.record(outcome)
 
     def _ramp_delay(self, index: int, total: int) -> float:
         if self.config.rampup <= 0 or total <= 1:

@@ -6,7 +6,7 @@ import time
 
 from ltm100.core.multiproc import ShardResult, run_shards
 from ltm100.core.op import OpResult, OpType
-from ltm100.core.runner import SessionAdmissionStats
+from ltm100.core.runner import PreingestStats, SessionAdmissionStats
 
 
 def _synchronized_entry(args: dict, proc_index: int) -> list[OpResult]:
@@ -37,6 +37,13 @@ def _session_stats_entry(args: dict, proc_index: int) -> ShardResult:
     stats.record("offered", "group-b")
     stats.record("rejected", "group-b")
     return ShardResult([], stats)
+
+
+def _preingest_stats_entry(args: dict, proc_index: int) -> ShardResult:
+    stats = PreingestStats()
+    for _ in range(2):
+        stats.record((proc_index + 1) * 10)
+    return ShardResult([], SessionAdmissionStats(), stats)
 
 
 def test_parent_hooks_bracket_every_shards_measured_window():
@@ -78,4 +85,16 @@ def test_session_admission_stats_are_pooled_across_shards():
                 "rejection_rate": 1.0,
             },
         },
+    }
+
+
+def test_preingest_stats_are_pooled_across_shards():
+    result = run_shards(_preingest_stats_entry, {}, 2)
+
+    assert isinstance(result, ShardResult)
+    assert result.preingest.as_dict() == {
+        "users": 4,
+        "input_items": 60,
+        "min_items_per_user": 10,
+        "max_items_per_user": 20,
     }

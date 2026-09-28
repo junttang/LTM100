@@ -18,20 +18,21 @@ from __future__ import annotations
 
 import multiprocessing as mp
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from queue import Empty
 from typing import Any
 
 from ltm100.core.op import OpResult
-from ltm100.core.runner import SessionAdmissionStats
+from ltm100.core.runner import PreingestStats, SessionAdmissionStats
 
 
 @dataclass
 class ShardResult:
-    """Measured request results and open-session admission counters."""
+    """Measured results plus unmeasured phase counters from one shard."""
 
     results: list[OpResult]
     sessions: SessionAdmissionStats
+    preingest: PreingestStats = field(default_factory=PreingestStats)
 
 
 # Set by the parent before spawning; the child rebuilds its own run from it.
@@ -110,8 +111,10 @@ def run_shards(
     if parts and isinstance(parts[0], ShardResult):
         pooled_results: list[OpResult] = []
         pooled_sessions = SessionAdmissionStats()
+        pooled_preingest = PreingestStats()
         for part in parts:
             pooled_results.extend(part.results)
+            pooled_preingest.merge(part.preingest)
             pooled_sessions.offered += part.sessions.offered
             pooled_sessions.admitted += part.sessions.admitted
             pooled_sessions.rejected += part.sessions.rejected
@@ -125,7 +128,7 @@ def run_shards(
                     target.offered += counts.offered
                     target.admitted += counts.admitted
                     target.rejected += counts.rejected
-        return ShardResult(pooled_results, pooled_sessions)
+        return ShardResult(pooled_results, pooled_sessions, pooled_preingest)
 
     pooled: list[OpResult] = []
     for part in parts:

@@ -9,6 +9,12 @@
 #   ltm100 run --config examples/synthetic.yaml \
 #       --scenario search-load --users 20 --duration 30 --seed 0 \
 #       --preingest --preingest-fraction 1.0
+#
+# For one controlled memory-growth point, raise memories_per_user to at least
+# the requested size and keep the query pool fixed across points:
+#   ltm100 run --config examples/synthetic.yaml \
+#       --scenario search-load --users 1 --duration 30 --seed 0 \
+#       --preingest --preingest-items-per-user 10000 --query-limit 1000
 
 dataset:
   name: synthetic
