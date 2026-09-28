@@ -21,6 +21,8 @@ Current release: **v0.4.2**
   event-loop core.
 - Optional pre-ingest, ramp-up, raw request records, and server-side latency
   metrics.
+- Repeated memory-growth sweeps with fixed query workloads and isolated corpus
+  points.
 - Pluggable datasets and backend adapters.
 - JSON and CSV reports with successful, error, and rejected traffic separated.
 

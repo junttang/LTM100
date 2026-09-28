@@ -136,8 +136,37 @@ count. Exact pre-ingest streams only the requested prefix; it does not
 materialize the complete per-user corpus in the load generator. `--query-limit`
 is valid only for `search-load` and requires that many source memories. Keeping
 it constant across runs prevents query-pool growth from becoming a confounding
-variable. These controls establish one memory-growth point; automated sweep
-orchestration is intentionally separate.
+variable. These controls establish one memory-growth point.
+
+Run the complete experiment with the memory-growth sweep. It executes the same
+closed-model `search-load` path at every point, gives every point and repetition
+a fresh backend user namespace, and keeps the source corpus and query prefix
+identical:
+
+```sh
+ltm100 sweep memory-growth --config examples/synthetic.yaml \
+    --memory-counts 10,50,100 --queries-per-user 10 \
+    --users 4 --duration 30 --warmup 5 --top-k 20 \
+    --global-concurrency 16 --repetitions 3 \
+    --output out/memory-growth
+```
+
+The bundled command above fits the example's default 100-memory synthetic
+corpus. For larger points, raise `dataset.memories_per_user` first. The query
+count must not exceed the smallest memory point, and the configured dataset
+must expose at least the largest requested number of memories per user.
+Each repetition is kept under `n_<count>/repeat_<index>/`. The root
+`manifest.json` records point status and median/min/max/range across valid
+repetitions; `summary.csv` provides one row per repetition. A repetition is
+explicitly marked invalid when exact pre-ingest accounting differs from the
+requested point, searches error or reject, or empty results exceed
+`--max-empty-rate` (strictly zero by default). Failed and invalid point reports
+are preserved, and the sweep exits nonzero rather than silently aggregating
+them as valid results.
+
+The sweep requires the backend's normal per-user tenancy mapping. A fixed
+shared `backend.project_id` is rejected because changing only a producer filter
+would not isolate the physical stored corpus between size points.
 
 ### Mixed open-model load
 

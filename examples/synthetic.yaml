@@ -15,6 +15,12 @@
 #   ltm100 run --config examples/synthetic.yaml \
 #       --scenario search-load --users 1 --duration 30 --seed 0 \
 #       --preingest --preingest-items-per-user 10000 --query-limit 1000
+#
+# Or sweep the default 100-memory corpus automatically:
+#   ltm100 sweep memory-growth --config examples/synthetic.yaml \
+#       --memory-counts 10,50,100 --queries-per-user 10 \
+#       --users 4 --duration 30 --repetitions 3 \
+#       --output out/memory-growth
 
 dataset:
   name: synthetic
