@@ -20,7 +20,10 @@ from ltm100.core.memory_growth import (
 
 def _sweep_args(tmp_path: Path, *extra: str):
     config = tmp_path / "config.yaml"
-    config.write_text("dataset: {}\nbackend: {}\n")
+    config.write_text(
+        "dataset:\n  name: synthetic\n  memories_per_user: 20\n"
+        "backend:\n  name: memmachine\n"
+    )
     return build_parser().parse_args(
         [
             "sweep",
@@ -270,3 +273,66 @@ def test_memory_growth_sweep_rejects_fixed_shared_project(tmp_path):
 
     with pytest.raises(ValueError, match="cannot isolate corpus-size points"):
         _run_memory_growth(args)
+
+
+def test_memory_growth_sweep_fails_fast_when_any_user_is_too_short(
+    tmp_path, monkeypatch
+):
+    args = _sweep_args(tmp_path)
+    launched = []
+
+    class UnevenDataset:
+        name = "uneven"
+
+        def users(self, n_users, *, seed):
+            assert n_users == 2
+            return ["long", "short"]
+
+        def memory_stream(self, user):
+            count = 20 if user == "long" else 19
+            for index in range(count):
+                yield type("Item", (), {"content": str(index)})()
+
+    monkeypatch.setattr(
+        "ltm100.core.memory_growth.build_dataset", lambda cfg: UnevenDataset()
+    )
+    monkeypatch.setattr("ltm100.cli._run", lambda run_args: launched.append(run_args))
+
+    with pytest.raises(ValueError, match=r"largest memory point 20.*'short'.*19"):
+        _run_memory_growth(args)
+
+    assert launched == []
+    assert not Path(args.output).exists()
+
+
+def test_memory_growth_capacity_scan_stops_at_largest_point(tmp_path, monkeypatch):
+    args = _sweep_args(tmp_path, "--repetitions", "1")
+    yielded = 0
+
+    class BoundedDataset:
+        name = "bounded"
+
+        def users(self, n_users, *, seed):
+            return [f"u{index}" for index in range(n_users)]
+
+        def memory_stream(self, user):
+            nonlocal yielded
+            for index in range(20):
+                yielded += 1
+                yield type("Item", (), {"content": str(index)})()
+            raise AssertionError("capacity scan read beyond the largest point")
+
+    def fake_run(run_args):
+        output = Path(run_args.output)
+        output.mkdir(parents=True)
+        payload = _payload(run_args.preingest_items_per_user)
+        (output / "summary.json").write_text(json.dumps(payload))
+        return 0
+
+    monkeypatch.setattr(
+        "ltm100.core.memory_growth.build_dataset", lambda cfg: BoundedDataset()
+    )
+    monkeypatch.setattr("ltm100.cli._run", fake_run)
+
+    assert _run_memory_growth(args) == 0
+    assert yielded == 40

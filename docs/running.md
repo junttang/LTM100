@@ -153,16 +153,17 @@ ltm100 sweep memory-growth --config examples/synthetic.yaml \
 
 The bundled command above fits the example's default 100-memory synthetic
 corpus. For larger points, raise `dataset.memories_per_user` first. The query
-count must not exceed the smallest memory point, and the configured dataset
-must expose at least the largest requested number of memories per user.
+count must not exceed the smallest memory point. Before creating output or
+calling the backend, the sweep bounded-scans every selected user's source
+stream to ensure it can supply the largest requested memory count.
 Each repetition is kept under `n_<count>/repeat_<index>/`. The root
 `manifest.json` records point status and median/min/max/range across valid
 repetitions; `summary.csv` provides one row per repetition. A repetition is
-explicitly marked invalid when exact pre-ingest accounting differs from the
-requested point, searches error or reject, or empty results exceed
-`--max-empty-rate` (strictly zero by default). Failed and invalid point reports
-are preserved, and the sweep exits nonzero rather than silently aggregating
-them as valid results.
+explicitly marked invalid when its completed pre-ingest accounting differs
+from the requested point, searches error or reject, or empty results exceed
+`--max-empty-rate` (strictly zero by default). Runtime exceptions are recorded
+as failed repetitions. Failed and invalid point reports are preserved, and the
+sweep exits nonzero rather than silently aggregating them as valid results.
 
 The sweep requires the backend's normal per-user tenancy mapping. A fixed
 shared `backend.project_id` is rejected because changing only a producer filter

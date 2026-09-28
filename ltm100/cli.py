@@ -172,10 +172,27 @@ async def _run_shard_async(args: argparse.Namespace) -> ShardResult:
         **hooks,
     )
     async with backend:  # type: ignore[arg-type]
-        await runner.run()
-        if run_cfg.delete_on_exit:
-            # Each shard owns the users it drove, so it tears down its own.
-            await backend.teardown(runner.users, delete=True)
+        run_failed = False
+        try:
+            await runner.run()
+        except BaseException:
+            run_failed = True
+            raise
+        finally:
+            users = getattr(runner, "users", [])
+            if run_cfg.delete_on_exit and users:
+                try:
+                    # Each shard owns the users it drove, so it tears down its own.
+                    await backend.teardown(users, delete=True)
+                except Exception:
+                    if not run_failed:
+                        raise
+                    # Preserve the workload failure that triggered cleanup;
+                    # teardown is best-effort only on that exceptional path.
+                    logger.warning(
+                        "teardown failed after the benchmark run failed",
+                        exc_info=True,
+                    )
     return ShardResult(
         runner.recorder.raw(), runner.session_stats, runner.preingest_stats
     )

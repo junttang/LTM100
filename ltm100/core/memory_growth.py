@@ -15,14 +15,14 @@ import logging
 from collections.abc import Callable, Iterator
 from dataclasses import replace
 from datetime import datetime, timezone
-from itertools import pairwise
+from itertools import islice, pairwise
 from pathlib import Path
 from statistics import median
 from typing import Any
 from uuid import uuid4
 
 from ltm100.common import DatasetAdapter, MemoryItem, UserId
-from ltm100.config import load_config
+from ltm100.config import BenchmarkConfig, build_dataset, load_config
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +262,9 @@ def _run_args(
     )
 
 
-def _validate_args(args: argparse.Namespace) -> list[int]:
+def _validate_args(
+    args: argparse.Namespace,
+) -> tuple[list[int], BenchmarkConfig]:
     counts = parse_memory_counts(args.memory_counts)
     if args.duration <= 0 and args.ops <= 0:
         raise ValueError("memory-growth sweep requires either --duration or --ops")
@@ -294,7 +296,35 @@ def _validate_args(args: argparse.Namespace) -> list[int]:
             "memory-growth sweep requires per-user backend projects; a fixed "
             "backend.project_id cannot isolate corpus-size points"
         )
-    return counts
+    return counts, cfg
+
+
+def _validate_dataset_capacity(
+    args: argparse.Namespace,
+    cfg: BenchmarkConfig,
+    required: int,
+) -> None:
+    """Fail before backend work when any selected user is too short.
+
+    Dataset streams may vary by user, so checking only the first user would
+    make the largest point conditional on assignment order. Consumption is
+    bounded at ``required`` and does not materialize the items.
+    """
+    dataset = build_dataset(cfg.dataset)
+    users = dataset.users(args.users, seed=args.seed)
+    if len(users) != args.users:
+        raise ValueError(
+            f"dataset returned {len(users)} users, but the sweep requires "
+            f"{args.users}"
+        )
+    for user in users:
+        available = sum(1 for _ in islice(dataset.memory_stream(user), required))
+        if available < required:
+            raise ValueError(
+                f"largest memory point {required} requires at least {required} "
+                f"memory items for user {user!r}, but the dataset yielded "
+                f"{available}"
+            )
 
 
 def run_memory_growth(
@@ -302,12 +332,13 @@ def run_memory_growth(
     run_one: Callable[[argparse.Namespace], int],
 ) -> int:
     """Run isolated, repeated ``search-load`` points as corpus size grows."""
-    counts = _validate_args(args)
+    counts, cfg = _validate_args(args)
     output = Path(args.output)
     if output.exists() and not output.is_dir():
         raise ValueError(f"output path is not a directory: {output}")
     if output.exists() and any(output.iterdir()):
         raise ValueError(f"output directory is not empty: {output}")
+    _validate_dataset_capacity(args, cfg, max(counts))
     output.mkdir(parents=True, exist_ok=True)
 
     started_at = datetime.now(timezone.utc)
