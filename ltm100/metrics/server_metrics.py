@@ -362,7 +362,7 @@ def build_report(before_text: str, after_text: str, *, window: str) -> dict[str,
             for q, col in zip(_QUANTILES, ("p50", "p90", "p99")):
                 value, beyond = quantile(hist["buckets"], hist["count"], q)
                 row[col] = value
-                if value is None and hist["buckets"]:
+                if beyond:
                     notes.append(f"{col} beyond buckets")
             if not hist["buckets"]:
                 notes.append("no buckets exposed")

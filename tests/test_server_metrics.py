@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+from typing import ClassVar
 
 import pytest
 from aiohttp import web
@@ -300,7 +301,7 @@ async def test_collector_captures_both_and_never_raises():
 
 class _HookBackend:
     name = "fake"
-    order: list[str] = []
+    order: ClassVar[list[str]] = []
 
     async def setup(self, users):
         return None
