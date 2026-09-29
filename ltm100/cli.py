@@ -376,8 +376,10 @@ def _run(args: argparse.Namespace) -> int:
                 "status": "unsupported",
                 "window": None,
                 "warnings": [
-                    f"backend adapter {cfg.backend.name!r} implements no server "
-                    "metrics query"
+                    (
+                        f"backend adapter {cfg.backend.name!r} implements no server "
+                        "metrics query"
+                    ),
                 ],
                 "rows": [],
             }

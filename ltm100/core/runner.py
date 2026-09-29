@@ -242,7 +242,7 @@ class LoadRunner:
             return
         try:
             await hook()
-        except Exception:  # noqa: BLE001 - hooks observe the run, never break it
+        except Exception:  # hooks observe the run, never break it
             logger.warning("%s hook failed", what, exc_info=True)
 
     def shard_users(self, users: list[UserId]) -> list[UserId]:
