@@ -385,3 +385,70 @@ def test_cli_cleanup_subcommand(tmp_path):
     )
     assert args.command == "cleanup"
     assert args.users == 5
+
+
+@pytest.mark.asyncio
+async def test_failed_run_still_tears_down_provisioned_users(tmp_path, monkeypatch):
+    from ltm100 import cli
+    from ltm100.common import MemoryItem
+
+    class ShortDataset:
+        name = "short"
+
+        def users(self, n_users, *, seed):
+            return ["u0"]
+
+        def memory_stream(self, user):
+            yield MemoryItem(content="only one", producer=user)
+
+    class Backend:
+        name = "fake"
+        add_batch_size = 10
+
+        def __init__(self):
+            self.torn_down = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def setup(self, users):
+            return None
+
+        async def add(self, user, items):
+            return ["id"]
+
+        async def search(self, user, query):
+            return []
+
+        async def teardown(self, users, *, delete):
+            self.torn_down.append((list(users), delete))
+
+    backend = Backend()
+    monkeypatch.setattr(cli, "build_dataset", lambda cfg: ShortDataset())
+    monkeypatch.setattr(cli, "build_backend", lambda cfg: backend)
+    args = build_parser().parse_args(
+        [
+            "run",
+            "--config",
+            _write_config(tmp_path),
+            "--scenario",
+            "search-load",
+            "--users",
+            "1",
+            "--ops",
+            "1",
+            "--query-limit",
+            "1",
+            "--preingest",
+            "--preingest-items-per-user",
+            "2",
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match=r"pre-ingest failed.*yielded 1"):
+        await cli._run_shard_async(args)
+
+    assert backend.torn_down == [(["u0"], True)]

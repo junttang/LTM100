@@ -2,6 +2,7 @@
 
 Top-level commands:
   run      Drive a benchmark run: provision users, run a scenario, report.
+  sweep    Repeat a controlled experiment across parameter points.
   cleanup  Delete per-user state for a run (without running).
 
 Per-run parameters come from CLI flags; adapter choices and endpoint/auth
@@ -22,6 +23,10 @@ from typing import Any
 from ltm100.config import build_backend, build_dataset, load_config
 from ltm100.core.chat_profile import load_chat_profile
 from ltm100.core.config import RunConfig
+from ltm100.core.memory_growth import (
+    NamespacedDataset,
+    run_memory_growth,
+)
 from ltm100.core.multiproc import ShardResult, run_shards
 from ltm100.core.runner import LoadRunner
 from ltm100.core.scenarios import get_scenario
@@ -123,6 +128,9 @@ def _build_scenario(args: argparse.Namespace):
 async def _run_shard_async(args: argparse.Namespace) -> ShardResult:
     cfg = load_config(args.config)
     dataset = build_dataset(cfg.dataset)
+    namespace = getattr(args, "_user_namespace", "")
+    if namespace:
+        dataset = NamespacedDataset(dataset, namespace)
     backend = build_backend(cfg.backend)
     run_cfg = _build_run_config(args)
     scenario = _build_scenario(args)
@@ -164,10 +172,27 @@ async def _run_shard_async(args: argparse.Namespace) -> ShardResult:
         **hooks,
     )
     async with backend:  # type: ignore[arg-type]
-        await runner.run()
-        if run_cfg.delete_on_exit:
-            # Each shard owns the users it drove, so it tears down its own.
-            await backend.teardown(runner.users, delete=True)
+        run_failed = False
+        try:
+            await runner.run()
+        except BaseException:
+            run_failed = True
+            raise
+        finally:
+            users = getattr(runner, "users", [])
+            if run_cfg.delete_on_exit and users:
+                try:
+                    # Each shard owns the users it drove, so it tears down its own.
+                    await backend.teardown(users, delete=True)
+                except Exception:
+                    if not run_failed:
+                        raise
+                    # Preserve the workload failure that triggered cleanup;
+                    # teardown is best-effort only on that exceptional path.
+                    logger.warning(
+                        "teardown failed after the benchmark run failed",
+                        exc_info=True,
+                    )
     return ShardResult(
         runner.recorder.raw(), runner.session_stats, runner.preingest_stats
     )
@@ -293,6 +318,10 @@ def _run_metadata(
                 top_k=args.top_k,
             )
             meta["chat_profile"] = profile.metadata(args.users)
+
+    sweep = getattr(args, "_sweep_context", None)
+    if sweep is not None:
+        meta["sweep"] = sweep
 
     return meta
 
@@ -466,7 +495,8 @@ def _run(args: argparse.Namespace) -> int:
     payload: dict[str, Any] = {"meta": meta, "summary": summary}
     if display_metrics is not None:
         payload["server_metrics"] = display_metrics
-    print(json.dumps(payload, indent=2))
+    if not getattr(args, "_quiet", False):
+        print(json.dumps(payload, indent=2))
 
     if args.output:
         out = args.output.rstrip("/")
@@ -478,9 +508,14 @@ def _run(args: argparse.Namespace) -> int:
             write_server_metrics(server_metrics, out)
         if args.raw:
             write_raw_ndjson(raw, f"{out}/raw.ndjson")
-        print(f"reports written to {out}/")
+        if not getattr(args, "_quiet", False):
+            print(f"reports written to {out}/")
 
     return 0
+
+
+def _run_memory_growth(args: argparse.Namespace) -> int:
+    return run_memory_growth(args, _run)
 
 
 async def _cleanup(args: argparse.Namespace) -> int:
@@ -651,6 +686,75 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--raw", action="store_true", help="also write raw.ndjson")
     run.add_argument("--no-delete-on-exit", action="store_true", help="keep user state")
     run.set_defaults(func=_run)
+
+    sweep = sub.add_parser("sweep", help="run a controlled experiment sweep")
+    sweep_sub = sweep.add_subparsers(dest="sweep", required=True)
+    growth = sweep_sub.add_parser(
+        "memory-growth",
+        parents=[common],
+        help="measure search behavior as stored memories per user grow",
+    )
+    growth.add_argument(
+        "--memory-counts",
+        required=True,
+        help="strictly increasing memories-per-user points, e.g. 100,1000,10000",
+    )
+    growth.add_argument(
+        "--queries-per-user",
+        type=int,
+        required=True,
+        help="fixed source-memory prefix used as each user's query pool",
+    )
+    growth_termination = growth.add_mutually_exclusive_group(required=True)
+    growth_termination.add_argument(
+        "--duration", type=float, default=0.0, help="measured seconds per repetition"
+    )
+    growth_termination.add_argument(
+        "--ops", type=int, default=0, help="measured total search ops per repetition"
+    )
+    growth.add_argument(
+        "--repetitions", type=int, default=3, help="repetitions per memory point"
+    )
+    growth.add_argument(
+        "--max-empty-rate",
+        type=float,
+        default=0.0,
+        help="largest acceptable successful-search empty rate (default 0)",
+    )
+    growth.add_argument(
+        "--global-concurrency", type=int, default=0, help="max in-flight searches"
+    )
+    growth.add_argument(
+        "--warmup",
+        type=float,
+        default=0.0,
+        help="unmeasured workload seconds before each measured repetition",
+    )
+    growth.add_argument("--rampup", type=float, default=0.0, help="ramp-up seconds")
+    growth.add_argument(
+        "--top-k", type=int, default=20, help="results requested per search"
+    )
+    growth.add_argument(
+        "--expand", type=int, default=0, help="server-side context expansion"
+    )
+    growth.add_argument(
+        "--filter", default="", help="server-side metadata filter expression"
+    )
+    growth.add_argument(
+        "--procs", type=int, default=1, help="load-generator process count"
+    )
+    growth.add_argument(
+        "--server-metrics",
+        action="store_true",
+        help="collect backend-provided server metrics for every repetition",
+    )
+    growth.add_argument(
+        "--raw", action="store_true", help="write raw.ndjson for every repetition"
+    )
+    growth.add_argument(
+        "--output", required=True, help="empty output directory for sweep reports"
+    )
+    growth.set_defaults(func=_run_memory_growth)
 
     clean = sub.add_parser("cleanup", parents=[common], help="delete per-user state")
     clean.set_defaults(func=_cleanup)
