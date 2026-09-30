@@ -9,7 +9,9 @@ defaults:
   think: 0.05
   search_every: 1
   answer_time: 2.0
+  answer_time_variation: 0.30  # bounded Uniform range: 1.4..2.6 seconds
   user_gap: 3.0
+  user_gap_variation: 0.50     # bounded Uniform range: 1.5..4.5 seconds
 
 groups:
   - name: standard

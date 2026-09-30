@@ -105,6 +105,8 @@ def _build_scenario(args: argparse.Namespace):
         kwargs["search_every"] = args.search_every
         kwargs["answer_time"] = args.answer_time
         kwargs["user_gap"] = args.user_gap
+        kwargs["answer_time_variation"] = args.answer_time_variation
+        kwargs["user_gap_variation"] = args.user_gap_variation
         kwargs["top_k"] = args.top_k
         if args.chat_profile:
             kwargs["profile"] = load_chat_profile(
@@ -114,6 +116,8 @@ def _build_scenario(args: argparse.Namespace):
                 answer_time=args.answer_time,
                 user_gap=args.user_gap,
                 top_k=args.top_k,
+                answer_time_variation=args.answer_time_variation,
+                user_gap_variation=args.user_gap_variation,
             )
     elif args.scenario == "search-load":
         kwargs["top_k"] = args.top_k
@@ -306,6 +310,8 @@ def _run_metadata(
             search_every=args.search_every,
             answer_time=args.answer_time,
             user_gap=args.user_gap,
+            answer_time_variation=args.answer_time_variation,
+            user_gap_variation=args.user_gap_variation,
         )
         if args.chat_profile:
             profile = load_chat_profile(
@@ -315,6 +321,8 @@ def _run_metadata(
                 answer_time=args.answer_time,
                 user_gap=args.user_gap,
                 top_k=args.top_k,
+                answer_time_variation=args.answer_time_variation,
+                user_gap_variation=args.user_gap_variation,
             )
             meta["chat_profile"] = profile.metadata(args.users)
 
@@ -645,11 +653,27 @@ def build_parser() -> argparse.ArgumentParser:
         "uniformly to all users",
     )
     run.add_argument(
+        "--answer-time-variation",
+        type=float,
+        default=None,
+        help="chat-replay: optional bounded variation ratio around --answer-time "
+        "(0 = fixed, 0.3 = +/-30%%, 1 = 0..2x). When omitted, preserves the "
+        "legacy Exponential distribution",
+    )
+    run.add_argument(
         "--user-gap",
         type=float,
         default=0.0,
         help="chat-replay: mean seconds the user takes before the next turn "
         "(Exponential; 0 = back-to-back, default). Applied uniformly to all users",
+    )
+    run.add_argument(
+        "--user-gap-variation",
+        type=float,
+        default=None,
+        help="chat-replay: optional bounded variation ratio around --user-gap "
+        "(0 = fixed, 0.5 = +/-50%%, 1 = 0..2x). When omitted, preserves the "
+        "legacy Exponential distribution",
     )
     run.add_argument(
         "--expand",

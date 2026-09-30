@@ -16,7 +16,9 @@ _SETTING_KEYS = {
     "think",
     "search_every",
     "answer_time",
+    "answer_time_variation",
     "user_gap",
+    "user_gap_variation",
     "top_k",
     "concurrent_sessions",
     "max_sessions_per_user",
@@ -30,6 +32,8 @@ class ChatSettings:
     answer_time: float
     user_gap: float
     top_k: int
+    answer_time_variation: float | None = None
+    user_gap_variation: float | None = None
     concurrent_sessions: int = 1
     max_sessions_per_user: int | None = None
 
@@ -109,6 +113,8 @@ def load_chat_profile(
     answer_time: float,
     user_gap: float,
     top_k: int,
+    answer_time_variation: float | None = None,
+    user_gap_variation: float | None = None,
 ) -> ChatProfile:
     """Load and strictly validate a versioned chat workload profile."""
     with open(path, "r", encoding="utf-8") as file:
@@ -130,7 +136,9 @@ def load_chat_profile(
         "think": think,
         "search_every": search_every,
         "answer_time": answer_time,
+        "answer_time_variation": answer_time_variation,
         "user_gap": user_gap,
+        "user_gap_variation": user_gap_variation,
         "top_k": top_k,
         "concurrent_sessions": 1,
         "max_sessions_per_user": None,
@@ -174,6 +182,12 @@ def _settings(raw: dict[str, Any], where: str) -> ChatSettings:
     think = _number(raw["think"], f"{where}.think")
     answer_time = _number(raw["answer_time"], f"{where}.answer_time")
     user_gap = _number(raw["user_gap"], f"{where}.user_gap")
+    answer_time_variation = _optional_ratio(
+        raw["answer_time_variation"], f"{where}.answer_time_variation"
+    )
+    user_gap_variation = _optional_ratio(
+        raw["user_gap_variation"], f"{where}.user_gap_variation"
+    )
     search_every = _positive_int(raw["search_every"], f"{where}.search_every")
     top_k = _positive_int(raw["top_k"], f"{where}.top_k")
     sessions = _positive_int(raw["concurrent_sessions"], f"{where}.concurrent_sessions")
@@ -192,6 +206,8 @@ def _settings(raw: dict[str, Any], where: str) -> ChatSettings:
         answer_time=answer_time,
         user_gap=user_gap,
         top_k=top_k,
+        answer_time_variation=answer_time_variation,
+        user_gap_variation=user_gap_variation,
         concurrent_sessions=sessions,
         max_sessions_per_user=max_sessions,
     )
@@ -215,6 +231,15 @@ def _optional_positive_int(value: Any, field: str) -> int | None:
     if value is None:
         return None
     return _positive_int(value, field)
+
+
+def _optional_ratio(value: Any, field: str) -> float | None:
+    if value is None:
+        return None
+    ratio = _number(value, field)
+    if not 0.0 <= ratio <= 1.0:
+        raise ValueError(f"{field} must be between 0 and 1")
+    return ratio
 
 
 def _reject_unknown(raw: dict[str, Any], allowed: set[str], where: str) -> None:

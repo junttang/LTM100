@@ -40,7 +40,8 @@ Model the LLM answer gap and the user's reading/typing gap:
 ```sh
 ltm100 run --config examples/memmachine.yaml \
     --scenario chat-replay --users 10 --duration 60 --seed 0 \
-    --answer-time 2.0 --user-gap 3.0 \
+    --answer-time 2.0 --answer-time-variation 0.3 \
+    --user-gap 3.0 --user-gap-variation 0.5 \
     --output out/chat-replay
 ```
 
@@ -84,8 +85,8 @@ are resolved before process sharding, so `--procs` does not change them.
 
 Group fields override `defaults`, which override the corresponding CLI values:
 
-- `think`, `search_every`, `answer_time`, `user_gap`, and `top_k` shape each
-  group's conversation operations.
+- `think`, `search_every`, `answer_time`, `answer_time_variation`, `user_gap`,
+  `user_gap_variation`, and `top_k` shape each group's conversation operations.
 - `concurrent_sessions` is closed-model only. It creates that many fixed,
   sequential conversation lanes for each user.
 - `max_sessions_per_user` is open-model only. It caps active Poisson-arriving
@@ -249,7 +250,11 @@ ltm100 run --config examples/memmachine.yaml \
   `chat-replay` operations.
 - `--search-every N`: recall cadence in `chat-replay`.
 - `--answer-time SECONDS`: mean LLM answer delay in `chat-replay`.
+- `--answer-time-variation RATIO`: optional bounded variation around the answer
+  delay; `0.3` means +/-30%. Omit it for the legacy Exponential distribution.
 - `--user-gap SECONDS`: mean user reading/typing delay in `chat-replay`.
+- `--user-gap-variation RATIO`: optional bounded variation around the user
+  delay; `0.5` means +/-50%. Omit it for the legacy Exponential distribution.
 - `--chat-profile PATH`: group-specific `chat-replay` parameters and session
   controls.
 - `--server-metrics`: collect backend-provided server latency metrics.

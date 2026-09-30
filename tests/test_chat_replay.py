@@ -325,6 +325,70 @@ async def test_chat_replay_answer_time_gaps_after_user_turn_only():
     assert user_gap_total > 2.0
 
 
+def test_chat_replay_bounded_timing_variation_stays_within_ranges():
+    """Configured variation replaces the unbounded Exponential tail with a
+    seeded Uniform draw inside the requested percentage range."""
+    import itertools
+
+    plan = ChatReplay(
+        think=0.0,
+        answer_time=10.0,
+        answer_time_variation=0.25,
+        user_gap=20.0,
+        user_gap_variation=0.5,
+    ).plan("u0", DialogueDataset(), {"seed": 7})
+    ops = list(itertools.islice(plan, 9))
+
+    assert all(7.5 <= ops[index].delay <= 12.5 for index in (2, 5, 8))
+    assert all(10.0 <= ops[index].delay <= 30.0 for index in (3, 6))
+
+
+def test_chat_replay_zero_variation_makes_timing_fixed():
+    import itertools
+
+    plan = ChatReplay(
+        think=0.0,
+        answer_time=2.0,
+        answer_time_variation=0.0,
+        user_gap=3.0,
+        user_gap_variation=0.0,
+    ).plan("u0", DialogueDataset(), {"seed": 7})
+    ops = list(itertools.islice(plan, 9))
+
+    assert [ops[index].delay for index in (2, 5, 8)] == [2.0, 2.0, 2.0]
+    assert [ops[index].delay for index in (3, 6)] == [3.0, 3.0]
+
+
+def test_chat_replay_bounded_timing_is_seed_reproducible():
+    import itertools
+
+    scenario = ChatReplay(
+        think=0.0,
+        answer_time=2.0,
+        answer_time_variation=0.5,
+        user_gap=3.0,
+        user_gap_variation=0.5,
+    )
+
+    def delays(seed: int) -> list[float]:
+        plan = scenario.plan("u0", DialogueDataset(), {"seed": seed})
+        return [op.delay for op in itertools.islice(plan, 9)]
+
+    assert delays(11) == delays(11)
+    assert delays(11) != delays(12)
+
+
+def test_chat_replay_omitted_variation_preserves_exponential_draw():
+    import random
+
+    expected_rng = random.Random(13)
+    actual_rng = random.Random(13)
+
+    assert ChatReplay._timing_delay(actual_rng, 2.0, None) == expected_rng.expovariate(
+        0.5
+    )
+
+
 @pytest.mark.asyncio
 async def test_chat_replay_runner_waits_before_the_assistant_add(monkeypatch):
     """The runner applies Op.delay before execution, so answer_time must wait
@@ -369,6 +433,12 @@ async def test_chat_replay_rejects_negative_timing_params():
         ChatReplay(answer_time=-0.1)
     with pytest.raises(ValueError, match="user_gap"):
         ChatReplay(user_gap=-0.1)
+    with pytest.raises(ValueError, match="answer_time_variation"):
+        ChatReplay(answer_time_variation=-0.1)
+    with pytest.raises(ValueError, match="answer_time_variation"):
+        ChatReplay(answer_time_variation=1.1)
+    with pytest.raises(ValueError, match="user_gap_variation"):
+        ChatReplay(user_gap_variation=float("nan"))
 
 
 @pytest.mark.asyncio

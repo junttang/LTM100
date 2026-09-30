@@ -221,9 +221,9 @@ recall pattern.
 **LLM answer time and user think time** (`--answer-time`, `--user-gap`, both
 default 0 = back-to-back): a real chatbot does not loop back-to-back — after
 recalling, the LLM spends time generating an answer, and the user spends
-time reading/typing before the next turn. These are modeled as two *mean*
-delays (Exponential, the same distribution the open-model arrival process
-uses):
+time reading/typing before the next turn. By default these are modeled as two
+*mean* delays (Exponential, the same distribution the open-model arrival
+process uses):
 
 - `--answer-time T`: a delay ~Exp(mean=T) is attached to the **first ADD** of
   the following assistant turn. Since `Op.delay` is applied before the op,
@@ -234,6 +234,14 @@ uses):
   of a user turn, except the very first user turn of each replay pass (so
   each pass starts cleanly). Models the user reading the prior reply and
   typing the next utterance.
+
+`--answer-time-variation V` and `--user-gap-variation V` optionally replace
+the corresponding unbounded Exponential draw with a bounded Uniform range of
+`T * (1 - V)` through `T * (1 + V)`, where `V` is between 0 and 1. `V=0`
+makes the delay fixed, `V=0.3` means +/-30%, and `V=1` allows 0 through 2x.
+Omitting a variation flag preserves the original Exponential behavior. All
+draws remain deterministic for a fixed seed, and profiles may override both
+variation fields per group.
 
 Without a chat profile both apply uniformly to all users. A profile can
 override them per group. With both at 0, chat-replay reproduces the original

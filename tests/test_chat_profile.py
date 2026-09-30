@@ -184,10 +184,22 @@ def test_profile_defaults_and_group_overrides(tmp_path):
             tmp_path,
             {
                 "version": 1,
-                "defaults": {"top_k": 30, "search_every": 2},
+                "defaults": {
+                    "top_k": 30,
+                    "search_every": 2,
+                    "answer_time": 4.0,
+                    "answer_time_variation": 0.25,
+                    "user_gap": 8.0,
+                    "user_gap_variation": 0.5,
+                },
                 "groups": [
                     {"name": "standard", "share": 0.75},
-                    {"name": "power", "share": 0.25, "top_k": 80},
+                    {
+                        "name": "power",
+                        "share": 0.25,
+                        "top_k": 80,
+                        "answer_time_variation": 0.1,
+                    },
                 ],
             },
         )
@@ -196,7 +208,10 @@ def test_profile_defaults_and_group_overrides(tmp_path):
     assert standard.settings.top_k == 30
     assert standard.settings.search_every == 2
     assert standard.settings.think == 0.05  # CLI fallback
+    assert standard.settings.answer_time_variation == 0.25
+    assert standard.settings.user_gap_variation == 0.5
     assert power.settings.top_k == 80
+    assert power.settings.answer_time_variation == 0.1
 
 
 def test_profile_accepts_concurrent_session_counts(tmp_path):
@@ -253,6 +268,8 @@ def test_bundled_chat_profile_has_expected_tiers():
         "intensive",
     ]
     assert [group.settings.top_k for group in profile.groups] == [20, 50, 100]
+    assert {group.settings.answer_time_variation for group in profile.groups} == {0.3}
+    assert {group.settings.user_gap_variation for group in profile.groups} == {0.5}
     assert [group.settings.concurrent_sessions for group in profile.groups] == [1, 2, 5]
     assert [group.settings.max_sessions_per_user for group in profile.groups] == [
         1,
@@ -280,6 +297,10 @@ def test_bundled_chat_profile_has_expected_tiers():
             {"groups": [{"name": "a", "share": 1.0, "topk": 20}]},
             "unknown field",
         ),
+        (
+            {"groups": [{"name": "a", "share": 1.0, "answer_time_variation": 1.1}]},
+            "between 0 and 1",
+        ),
     ],
 )
 def test_profile_rejects_invalid_config(tmp_path, change, message):
@@ -294,10 +315,26 @@ def test_chat_profile_cli_scope_and_metadata(tmp_path):
     parser = build_parser()
     common = ["run", "--config", "unused.yaml", "--duration", "1"]
     args = parser.parse_args(
-        [*common, "--scenario", "chat-replay", "--chat-profile", profile_path]
+        [
+            *common,
+            "--scenario",
+            "chat-replay",
+            "--chat-profile",
+            profile_path,
+            "--answer-time",
+            "4",
+            "--answer-time-variation",
+            "0.25",
+            "--user-gap",
+            "8",
+            "--user-gap-variation",
+            "0.5",
+        ]
     )
     scenario = _build_scenario(args)
     assert scenario.profile is not None
+    assert scenario.answer_time_variation == 0.25
+    assert scenario.user_gap_variation == 0.5
 
     metadata = _run_metadata(
         args,
@@ -312,6 +349,11 @@ def test_chat_profile_cli_scope_and_metadata(tmp_path):
         2,
         0,
     ]
+    assert metadata["answer_time_variation"] == 0.25
+    assert metadata["user_gap_variation"] == 0.5
+    assert {
+        group["answer_time_variation"] for group in metadata["chat_profile"]["groups"]
+    } == {0.25}
 
     invalid = parser.parse_args(
         [*common, "--scenario", "search-load", "--chat-profile", profile_path]
