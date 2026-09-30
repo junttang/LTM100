@@ -65,7 +65,9 @@ def _memories(dataset: DatasetAdapter, user: UserId) -> list[MemoryItem]:
     return cached
 
 
-def _query_pool(scenario: Any, dataset: DatasetAdapter, user: UserId) -> list[QueryItem]:
+def _query_pool(
+    scenario: Any, dataset: DatasetAdapter, user: UserId
+) -> list[QueryItem]:
     """Cache the per-user query pool on the scenario instance.
 
     `_content_queries` builds one QueryItem per stored unit, so rebuilding it
@@ -483,9 +485,7 @@ class ChatReplay:
                 )
         else:
             sessions = self._sessions(user, dataset)
-            session_count = rng_state.get(
-                "session_count", settings.concurrent_sessions
-            )
+            session_count = rng_state.get("session_count", settings.concurrent_sessions)
             assigned = sessions[session_id::session_count]
             if not assigned:
                 return
@@ -548,24 +548,14 @@ class ChatReplay:
             if turn_ops:
                 if is_user and turn_index > 0 and settings.user_gap > 0:
                     extra = rng.expovariate(1.0 / settings.user_gap)
-                    turn_ops[0] = replace(
-                        turn_ops[0], delay=turn_ops[0].delay + extra
-                    )
-                if (
-                    is_assistant
-                    and previous_user_turn
-                    and settings.answer_time > 0
-                ):
+                    turn_ops[0] = replace(turn_ops[0], delay=turn_ops[0].delay + extra)
+                if is_assistant and previous_user_turn and settings.answer_time > 0:
                     extra = rng.expovariate(1.0 / settings.answer_time)
-                    turn_ops[0] = replace(
-                        turn_ops[0], delay=turn_ops[0].delay + extra
-                    )
+                    turn_ops[0] = replace(turn_ops[0], delay=turn_ops[0].delay + extra)
                 yield from turn_ops
             previous_user_turn = is_user and bool(turn_ops)
 
-    def _sessions(
-        self, user: UserId, dataset: DatasetAdapter
-    ) -> list[list[Turn]]:
+    def _sessions(self, user: UserId, dataset: DatasetAdapter) -> list[list[Turn]]:
         sessions = self._session_cache.get(user)
         if sessions is None:
             sessions = list(dataset.session_stream(user))

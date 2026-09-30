@@ -122,9 +122,7 @@ def run_shards(
                 if pooled_sessions.by_group is None:
                     pooled_sessions.by_group = {}
                 for group, counts in part.sessions.by_group.items():
-                    target = pooled_sessions.by_group.setdefault(
-                        group, type(counts)()
-                    )
+                    target = pooled_sessions.by_group.setdefault(group, type(counts)())
                     target.offered += counts.offered
                     target.admitted += counts.admitted
                     target.rejected += counts.rejected

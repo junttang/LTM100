@@ -26,13 +26,15 @@ def _make_app() -> web.Application:
         body = await request.json()
         key = (body["org_id"], body["project_id"])
         if key in created:
-            return web.json_response(
-                {"detail": "Project already exists"}, status=409
-            )
+            return web.json_response({"detail": "Project already exists"}, status=409)
         created.add(key)
         store.setdefault(key, [])
         return web.json_response(
-            {"org_id": key[0], "project_id": key[1], "description": body.get("description", "")},
+            {
+                "org_id": key[0],
+                "project_id": key[1],
+                "description": body.get("description", ""),
+            },
             status=201,
         )
 
@@ -145,7 +147,9 @@ async def test_search_returns_only_that_users_episodes(server_url):
 async def test_search_respects_top_k(server_url):
     async with MemMachineClient(server_url) as client:
         await client.setup(["u0"])
-        await client.add("u0", [MemoryItem(content=f"m{i}", producer="u0") for i in range(10)])
+        await client.add(
+            "u0", [MemoryItem(content=f"m{i}", producer="u0") for i in range(10)]
+        )
         res = await client.search("u0", QueryItem(query="q", top_k=3))
         assert len(res) == 3
 

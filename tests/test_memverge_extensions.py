@@ -57,15 +57,14 @@ def test_proc_index_must_be_in_range():
         RunConfig(users=8, duration=1.0, procs=2, proc_index=2)
 
 
-
-
-
-
-
 def _result(op: OpType, n_items: int, status: str = "ok") -> OpResult:
     return OpResult(
-        type=op, user_id="u", started_at=0.0, ended_at=0.1,
-        status=status, n_items=n_items,
+        type=op,
+        user_id="u",
+        started_at=0.0,
+        ended_at=0.1,
+        status=status,
+        n_items=n_items,
     )
 
 
@@ -80,16 +79,19 @@ def test_empty_rate_separates_working_search_from_silent_search():
 
 
 def test_errored_ops_are_excluded_from_empty_rate():
-    mixed = aggregate([
-        _result(OpType.SEARCH, 5),
-        _result(OpType.SEARCH, 0, status="error"),
-    ])
+    mixed = aggregate(
+        [
+            _result(OpType.SEARCH, 5),
+            _result(OpType.SEARCH, 0, status="error"),
+        ]
+    )
     # the errored op has no result count to speak of; it must not read as empty
     assert mixed["by_op"]["search"]["items"]["empty_rate"] == 0.0
     assert mixed["by_op"]["search"]["errors"] == 1
 
 
 # -- the build recorded in the report ---------------------------------------
+
 
 class _Cfg:
     def __init__(self, name="memmachine", options=None):
@@ -104,6 +106,7 @@ class _Bundle:
 
 def _patch_backend(monkeypatch, factory):
     from ltm100 import cli
+
     monkeypatch.setattr(cli, "build_backend", lambda cfg: factory())
 
 
@@ -111,14 +114,23 @@ def test_build_version_is_recorded(monkeypatch):
     from ltm100.cli import _backend_build
 
     class Healthy:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *e): return None
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *e):
+            return None
+
         async def health(self):
-            return {"status": "healthy", "service": "memmachine", "version": "0.3.9.post1"}
+            return {
+                "status": "healthy",
+                "service": "memmachine",
+                "version": "0.3.9.post1",
+            }
 
     _patch_backend(monkeypatch, Healthy)
     assert _backend_build(_Bundle(_Cfg())) == {
-        "build": "0.3.9.post1", "service": "memmachine",
+        "build": "0.3.9.post1",
+        "service": "memmachine",
     }
 
 
@@ -126,8 +138,12 @@ def test_an_unstamped_build_is_reported_as_such(monkeypatch):
     from ltm100.cli import _backend_build
 
     class Unstamped:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *e): return None
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *e):
+            return None
+
         async def health(self):
             return {"service": "memmachine", "version": "0.0.0"}
 
@@ -141,8 +157,12 @@ def test_a_failed_probe_does_not_break_the_report(monkeypatch):
     from ltm100.cli import _backend_build
 
     class Unreachable:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *e): return None
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *e):
+            return None
+
         async def health(self):
             raise ConnectionError("refused")
 
@@ -154,8 +174,11 @@ def test_a_backend_without_health_is_simply_omitted(monkeypatch):
     from ltm100.cli import _backend_build
 
     class NoHealth:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *e): return None
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *e):
+            return None
 
     _patch_backend(monkeypatch, NoHealth)
     assert _backend_build(_Bundle(_Cfg())) == {}
@@ -170,19 +193,35 @@ def test_the_report_meta_carries_the_build(tmp_path, monkeypatch, capsys):
     from ltm100 import cli
 
     cfg_path = tmp_path / "c.yaml"
-    cfg_path.write_text(_yaml.safe_dump({
-        "dataset": {"name": "synthetic", "length": 2},
-        "backend": {"name": "memmachine", "base_url": "http://localhost:8080"},
-    }))
+    cfg_path.write_text(
+        _yaml.safe_dump(
+            {
+                "dataset": {"name": "synthetic", "length": 2},
+                "backend": {"name": "memmachine", "base_url": "http://localhost:8080"},
+            }
+        )
+    )
 
-    monkeypatch.setattr(cli, "_backend_build",
-                        lambda cfg: {"build": "9.9.9+test", "service": "memmachine"})
+    monkeypatch.setattr(
+        cli,
+        "_backend_build",
+        lambda cfg: {"build": "9.9.9+test", "service": "memmachine"},
+    )
     monkeypatch.setattr(cli, "run_shards", lambda entry, args, procs: [])
 
-    args = cli.build_parser().parse_args([
-        "run", "--config", str(cfg_path), "--scenario", "chat-replay",
-        "--users", "2", "--duration", "1",
-    ])
+    args = cli.build_parser().parse_args(
+        [
+            "run",
+            "--config",
+            str(cfg_path),
+            "--scenario",
+            "chat-replay",
+            "--users",
+            "2",
+            "--duration",
+            "1",
+        ]
+    )
     assert cli._run(args) == 0
 
     meta = _json.loads(capsys.readouterr().out)["meta"]
@@ -320,8 +359,10 @@ def test_report_meta_keeps_the_whole_count_based_ops_budget(
 
 # -- whole-run load is divided across shards --------------------------------
 
+
 def test_shares_sum_to_the_total():
     from ltm100.cli import _split
+
     for total, procs in ((100, 4), (10, 4), (7, 3), (0, 4), (1, 4)):
         parts = [_split(total, procs, i) for i in range(procs)]
         assert sum(parts) == total, (total, procs, parts)
@@ -329,6 +370,7 @@ def test_shares_sum_to_the_total():
 
 def test_single_process_is_unchanged():
     from ltm100.cli import _split
+
     assert _split(100, 1, 0) == 100
 
 
@@ -336,13 +378,31 @@ def test_sharding_divides_concurrency_rate_ops_and_queue():
     """Each shard runs its own runner, so an undivided budget applies N times."""
     from ltm100 import cli
 
-    args = cli.build_parser().parse_args([
-        "run", "--config", "x", "--scenario", "chat-replay",
-        "--users", "24", "--duration", "10", "--procs", "4",
-        "--global-concurrency", "100",
-        "--model", "open", "--arrival-rate", "40", "--session-ops", "12",
-        "--queue-bound", "20",
-    ])
+    args = cli.build_parser().parse_args(
+        [
+            "run",
+            "--config",
+            "x",
+            "--scenario",
+            "chat-replay",
+            "--users",
+            "24",
+            "--duration",
+            "10",
+            "--procs",
+            "4",
+            "--global-concurrency",
+            "100",
+            "--model",
+            "open",
+            "--arrival-rate",
+            "40",
+            "--session-ops",
+            "12",
+            "--queue-bound",
+            "20",
+        ]
+    )
     shares = []
     for i in range(4):
         args.proc_index = i
@@ -364,8 +424,17 @@ def test_length_zero_yields_no_samples(tmp_path):
     from ltm100.adapters.datasets.longmemeval import LongMemEvalAdapter
 
     p = tmp_path / "d.json"
-    p.write_text(json.dumps([{"haystack_sessions": [[{"role": "user", "content": "a"}]],
-                              "haystack_session_ids": ["s1"]}] * 3))
+    p.write_text(
+        json.dumps(
+            [
+                {
+                    "haystack_sessions": [[{"role": "user", "content": "a"}]],
+                    "haystack_session_ids": ["s1"],
+                }
+            ]
+            * 3
+        )
+    )
     assert LongMemEvalAdapter(path=str(p), length=0)._load() == []
 
 
@@ -373,10 +442,21 @@ def test_sharding_divides_a_count_based_budget():
     """--ops caps the whole run, so each shard gets a share of it."""
     from ltm100 import cli
 
-    args = cli.build_parser().parse_args([
-        "run", "--config", "x", "--scenario", "chat-replay",
-        "--users", "8", "--ops", "1000", "--procs", "3",
-    ])
+    args = cli.build_parser().parse_args(
+        [
+            "run",
+            "--config",
+            "x",
+            "--scenario",
+            "chat-replay",
+            "--users",
+            "8",
+            "--ops",
+            "1000",
+            "--procs",
+            "3",
+        ]
+    )
     total = 0
     for i in range(3):
         args.proc_index = i
@@ -385,6 +465,7 @@ def test_sharding_divides_a_count_based_budget():
 
 
 # -- server-side search knobs: expand_context and filter ---------------------
+
 
 def _captured_search_payload(**query_kwargs):
     """Run MemMachineClient.search against a stub transport, return the payload."""
@@ -402,7 +483,9 @@ def _captured_search_payload(**query_kwargs):
         async def request(self, method, path, json=None, params=None):
             seen["path"] = path
             seen["payload"] = json
-            return {"content": {"episodic_memory": {"long_term_memory": {"episodes": []}}}}
+            return {
+                "content": {"episodic_memory": {"long_term_memory": {"episodes": []}}}
+            }
 
     c = MemMachineClient()
     c._transport = _Stub()
@@ -452,6 +535,7 @@ def test_scenarios_propagate_the_knobs_to_every_query():
 
 def test_negative_expand_is_rejected():
     from ltm100.core.scenarios import get_scenario
+
     for name in ("search-load", "mixed", "chat-replay"):
         with pytest.raises(ValueError, match="expand_context"):
             get_scenario(name, expand_context=-1)
@@ -463,10 +547,12 @@ def test_synthetic_categories_give_a_field_to_filter_on():
     off = list(SyntheticAdapter(memories_per_user=10).memory_stream("u0"))
     assert all(m.metadata == {} for m in off), "must be inert when unset"
 
-    on = list(SyntheticAdapter(memories_per_user=100, categories=10).memory_stream("u0"))
+    on = list(
+        SyntheticAdapter(memories_per_user=100, categories=10).memory_stream("u0")
+    )
     cats = [m.metadata["category"] for m in on]
     assert len(set(cats)) == 10
-    assert cats.count("cat_3") == 10          # one value selects ~1/N
+    assert cats.count("cat_3") == 10  # one value selects ~1/N
 
 
 def test_mcp_refuses_the_knobs_it_cannot_honour():
@@ -478,8 +564,10 @@ def test_mcp_refuses_the_knobs_it_cannot_honour():
 
     c = MemMachineMcpClient.__new__(MemMachineMcpClient)
     c.org_prefix = "t"
-    for q in (QueryItem(query="x", expand_context=2),
-              QueryItem(query="x", filter="metadata.category=cat_3")):
+    for q in (
+        QueryItem(query="x", expand_context=2),
+        QueryItem(query="x", filter="metadata.category=cat_3"),
+    ):
         with pytest.raises(ValueError, match="MCP backend supports neither"):
             asyncio.run(c.search("u0", q))
 
@@ -502,7 +590,9 @@ def test_mcp_refuses_metadata_it_would_drop():
     c = MemMachineMcpClient.__new__(MemMachineMcpClient)
     c.org_prefix = "t"
     with pytest.raises(ValueError, match="cannot store item metadata"):
-        asyncio.run(c.add("u0", [MemoryItem(content="a", metadata={"category": "cat_1"})]))
+        asyncio.run(
+            c.add("u0", [MemoryItem(content="a", metadata={"category": "cat_1"})])
+        )
 
 
 class _CountingSynthetic(SyntheticAdapter):
@@ -519,8 +609,13 @@ class _CountingSynthetic(SyntheticAdapter):
 
 def _plan_ops(scenario, dataset, n):
     return [
-        (op.type, tuple(getattr(i, "query", getattr(i, "content", None)) for i in op.items))
-        for op in itertools.islice(scenario.plan("syn_user_00000", dataset, {"seed": 0}), n)
+        (
+            op.type,
+            tuple(getattr(i, "query", getattr(i, "content", None)) for i in op.items),
+        )
+        for op in itertools.islice(
+            scenario.plan("syn_user_00000", dataset, {"seed": 0}), n
+        )
     ]
 
 
@@ -538,7 +633,9 @@ def test_plans_build_the_corpus_once_per_user_not_once_per_session(make_scenario
     scenario = make_scenario()
     for _ in range(5):
         _plan_ops(scenario, dataset, 3)
-    assert dataset.builds == 1, f"corpus rebuilt {dataset.builds} times across 5 sessions"
+    assert dataset.builds == 1, (
+        f"corpus rebuilt {dataset.builds} times across 5 sessions"
+    )
 
 
 @pytest.mark.parametrize(
@@ -558,7 +655,9 @@ def test_caching_does_not_change_the_plan(make_scenario):
         scenarios._query_pool = lambda sc, d, u: scenarios._content_queries(
             list(d.memory_stream(u)), sc.top_k, sc.expand_context, sc.filter
         )
-        uncached = _plan_ops(make_scenario(), SyntheticAdapter(memories_per_user=200), 50)
+        uncached = _plan_ops(
+            make_scenario(), SyntheticAdapter(memories_per_user=200), 50
+        )
     finally:
         scenarios._memories, scenarios._query_pool = real_memories, real_pool
 
@@ -643,7 +742,9 @@ def test_per_user_projects_are_still_deleted_on_exit_after_a_409():
     from ltm100.adapters.transports.rest import RestError
 
     c = _mm()
-    calls = _failing(c, RestError("POST /api/v2/projects -> 409: Project already exists"))
+    calls = _failing(
+        c, RestError("POST /api/v2/projects -> 409: Project already exists")
+    )
     asyncio.run(c.setup(["u0"]))
     asyncio.run(c.teardown(["u0"], delete=True))
     assert calls.count("/api/v2/projects/delete") == 1
@@ -722,7 +823,9 @@ def test_the_producer_scope_survives_an_or_in_the_caller_filter():
     c = _mm(project_id="shared", filter_by_producer=True)
     seen = _capture(c)
     asyncio.run(
-        c.search("alice", QueryItem(query="q", filter="m.category = 'a' OR m.category = 'b'"))
+        c.search(
+            "alice", QueryItem(query="q", filter="m.category = 'a' OR m.category = 'b'")
+        )
     )
     assert seen[0][2]["filter"] == (
         "producer_id = 'alice' AND (m.category = 'a' OR m.category = 'b')"
@@ -778,12 +881,24 @@ def _run_args(tmp_path, backend_extra, *flags):
         "backend:\n  name: memmachine\n  base_url: http://core:8081\n" + backend_extra
     )
     return build_parser().parse_args(
-        ["run", "--config", str(cfg), "--scenario", "search-load",
-         "--users", "4", "--duration", "1", *flags]
+        [
+            "run",
+            "--config",
+            str(cfg),
+            "--scenario",
+            "search-load",
+            "--users",
+            "4",
+            "--duration",
+            "1",
+            *flags,
+        ]
     )
 
 
-def test_a_shared_project_refuses_to_delete_on_exit_across_shards(monkeypatch, tmp_path):
+def test_a_shared_project_refuses_to_delete_on_exit_across_shards(
+    monkeypatch, tmp_path
+):
     """Each shard tears down its own users, which assumes a project per user.
     With one shared project the first shard to finish would delete it under the
     others, so the combination is refused before the run starts.
@@ -804,7 +919,9 @@ def test_a_shared_project_refuses_to_delete_on_exit_across_shards(monkeypatch, t
     assert launched == [4]
 
 
-def test_a_shared_project_without_a_producer_filter_warns(monkeypatch, tmp_path, caplog):
+def test_a_shared_project_without_a_producer_filter_warns(
+    monkeypatch, tmp_path, caplog
+):
     from ltm100.cli import _run
 
     _stub_launch(monkeypatch)

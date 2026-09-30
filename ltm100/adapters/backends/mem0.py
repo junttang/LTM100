@@ -74,9 +74,7 @@ class Mem0Client:
             }
             if metadata:
                 payload["metadata"] = metadata
-            response = await self._transport.request(
-                "POST", "/memories", json=payload
-            )
+            response = await self._transport.request("POST", "/memories", json=payload)
             for result in response.get("results", []):
                 uids.append(str(result.get("id", "")))
         return uids

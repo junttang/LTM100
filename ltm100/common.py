@@ -74,7 +74,6 @@ class Turn:
     items: list[MemoryItem]
 
 
-
 @runtime_checkable
 class DatasetAdapter(Protocol):
     """Turns a raw dataset into per-user add/search streams.
@@ -136,15 +135,11 @@ class LTMClient(Protocol):
         """Per-run provisioning (e.g. create a tenant/project per user)."""
         ...
 
-    async def add(
-        self, user: UserId, items: list[MemoryItem]
-    ) -> list[str]:
+    async def add(self, user: UserId, items: list[MemoryItem]) -> list[str]:
         """Store `items` for `user`; return backend ids (one per item)."""
         ...
 
-    async def search(
-        self, user: UserId, query: QueryItem
-    ) -> list[ResultItem]:
+    async def search(self, user: UserId, query: QueryItem) -> list[ResultItem]:
         """Retrieve memories for `user`, scoped to this user only."""
         ...
 
