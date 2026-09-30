@@ -8,7 +8,7 @@ error metrics.
 LTM100 measures **load, concurrency, and scalability behavior**, not retrieval
 or answer quality. It does not compute precision, recall, or MRR.
 
-Current release: **v0.4.2**
+Current release: **v0.4.3**
 
 ## Highlights
 
@@ -133,8 +133,8 @@ Releases use `vMAJOR.MINOR.PATCH` tags. During 0.x, a minor bump marks a
 meaningful tested milestone; breaking changes bump the minor version.
 
 ```sh
-git tag v0.4.2
-git push origin v0.4.2
+git tag v0.4.3
+git push origin v0.4.3
 ```
 
 ## License
