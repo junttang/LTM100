@@ -248,6 +248,7 @@ def _run_args(
         server_metrics=args.server_metrics,
         output=str(output),
         raw=args.raw,
+        time_series_interval=None,
         no_delete_on_exit=False,
         _quiet=True,
         _user_namespace=namespace,

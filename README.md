@@ -19,8 +19,8 @@ Current release: **v0.4.3**
 - Bounded admission and rejection accounting for overload experiments.
 - Multi-process load generation so the benchmark client can scale beyond one
   event-loop core.
-- Optional pre-ingest, ramp-up, raw request records, and server-side latency
-  metrics.
+- Optional pre-ingest, ramp-up, raw request records, fixed-interval E2E time
+  series, and server-side latency metrics.
 - Repeated memory-growth sweeps with fixed query workloads and isolated corpus
   points.
 - Pluggable datasets and backend adapters.
@@ -103,9 +103,11 @@ in the [running guide](docs/running.md).
 
 ## Reports
 
-With `--output DIR`, a run writes `summary.json` and `summary.csv`. Use `--raw`
-for per-request `raw.ndjson`, and `--server-metrics` for backend-provided
-server latency breakdowns when the selected adapter supports them.
+With `--output DIR`, a run writes `summary.json` and `summary.csv`. Use
+`--time-series-interval SECONDS` for client-observed E2E `timeseries.csv`,
+`--raw` for per-request `raw.ndjson`, and `--server-metrics` for
+backend-provided server latency breakdowns when the selected adapter supports
+them.
 
 Successful throughput and latency are reported separately from backend errors
 and queue rejections, so overload cannot inflate QPS or lower service-latency

@@ -33,6 +33,8 @@ class ShardResult:
     results: list[OpResult]
     sessions: SessionAdmissionStats
     preingest: PreingestStats = field(default_factory=PreingestStats)
+    measurement_started_at: float | None = None
+    measurement_ended_at: float | None = None
 
 
 # Set by the parent before spawning; the child rebuilds its own run from it.
@@ -112,9 +114,15 @@ def run_shards(
         pooled_results: list[OpResult] = []
         pooled_sessions = SessionAdmissionStats()
         pooled_preingest = PreingestStats()
+        measurement_starts: list[float] = []
+        measurement_ends: list[float] = []
         for part in parts:
             pooled_results.extend(part.results)
             pooled_preingest.merge(part.preingest)
+            if part.measurement_started_at is not None:
+                measurement_starts.append(part.measurement_started_at)
+            if part.measurement_ended_at is not None:
+                measurement_ends.append(part.measurement_ended_at)
             pooled_sessions.offered += part.sessions.offered
             pooled_sessions.admitted += part.sessions.admitted
             pooled_sessions.rejected += part.sessions.rejected
@@ -126,7 +134,13 @@ def run_shards(
                     target.offered += counts.offered
                     target.admitted += counts.admitted
                     target.rejected += counts.rejected
-        return ShardResult(pooled_results, pooled_sessions, pooled_preingest)
+        return ShardResult(
+            pooled_results,
+            pooled_sessions,
+            pooled_preingest,
+            min(measurement_starts) if measurement_starts else None,
+            max(measurement_ends) if measurement_ends else None,
+        )
 
     pooled: list[OpResult] = []
     for part in parts:
