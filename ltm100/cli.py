@@ -138,6 +138,7 @@ async def _run_shard_async(args: argparse.Namespace) -> ShardResult:
     hooks: dict[str, Any] = {}
     measure_sync = getattr(args, "_measure_sync", None)
     if measure_sync is not None:
+
         async def synchronized_start() -> None:
             await asyncio.to_thread(
                 measure_sync["queue"].put,
@@ -271,9 +272,7 @@ def _run_metadata(
         "rampup": args.rampup,
         "preingest": args.preingest,
         "preingest_fraction": (
-            args.preingest_fraction
-            if args.preingest_items_per_user is None
-            else None
+            args.preingest_fraction if args.preingest_items_per_user is None else None
         ),
         "preingest_items_per_user": args.preingest_items_per_user,
         "model": args.model,
@@ -530,7 +529,9 @@ async def _cleanup(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="ltm100", description="LTM100 load benchmark.")
+    parser = argparse.ArgumentParser(
+        prog="ltm100", description="LTM100 load benchmark."
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -545,9 +546,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument(
         "--duration", type=float, default=0.0, help="measured run seconds (0=off)"
     )
-    g.add_argument(
-        "--ops", type=int, default=0, help="measured total ops cap (0=off)"
-    )
+    g.add_argument("--ops", type=int, default=0, help="measured total ops cap (0=off)")
     run.add_argument("--global-concurrency", type=int, default=0, help="max in-flight")
     run.add_argument(
         "--warmup",
@@ -555,7 +554,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="unmeasured workload seconds before the measured run",
     )
-    run.add_argument("--preingest", action="store_true", help="pre-ingest memories before run")
+    run.add_argument(
+        "--preingest", action="store_true", help="pre-ingest memories before run"
+    )
     preingest_size = run.add_mutually_exclusive_group()
     preingest_size.add_argument(
         "--preingest-fraction",

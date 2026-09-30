@@ -159,7 +159,10 @@ async def test_open_model_rejects_under_overload():
 async def test_open_model_requires_valid_params():
     with pytest.raises(ValueError):
         RunConfig(
-            users=1, duration=1.0, model="open", session_ops=4  # arrival_rate=0
+            users=1,
+            duration=1.0,
+            model="open",
+            session_ops=4,  # arrival_rate=0
         )
     with pytest.raises(ValueError):
         RunConfig(

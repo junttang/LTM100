@@ -19,13 +19,17 @@ CANARY = "an unparenthesised OR is still the hazard"
 
 
 def _http(code: int) -> urllib.error.HTTPError:
-    return urllib.error.HTTPError("http://core:8081", code, "error", {}, io.BytesIO(b""))
+    return urllib.error.HTTPError(
+        "http://core:8081", code, "error", {}, io.BytesIO(b"")
+    )
 
 
 class _Server:
     """Stands in for post(): answers by path and records every call."""
 
-    def __init__(self, *, exists=False, lookup_code=None, create_code=201, fail_load=False):
+    def __init__(
+        self, *, exists=False, lookup_code=None, create_code=201, fail_load=False
+    ):
         self.exists = exists
         self.lookup_code = lookup_code
         self.create_code = create_code
@@ -44,7 +48,9 @@ class _Server:
         elif path == "/api/v2/memories" and self.fail_load:
             raise _http(500)
         elif path == "/api/v2/memories/search":
-            return {"content": {"episodic_memory": {"long_term_memory": {"episodes": []}}}}
+            return {
+                "content": {"episodic_memory": {"long_term_memory": {"episodes": []}}}
+            }
         return {}
 
     @property
@@ -99,7 +105,9 @@ def test_keep_leaves_even_a_project_this_run_created(monkeypatch):
 
 def _canary(monkeypatch, episodes):
     monkeypatch.setattr(fc, "search", lambda *a, **k: episodes)
-    _, failure, note = next(r for r in fc.checks("http://core:8081", "o") if r[0].startswith(CANARY))
+    _, failure, note = next(
+        r for r in fc.checks("http://core:8081", "o") if r[0].startswith(CANARY)
+    )
     return failure, note
 
 

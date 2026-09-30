@@ -52,7 +52,9 @@ def post(base: str, path: str, body: dict) -> dict:
     return json.loads(raw) if raw.strip() else {}
 
 
-def search(base: str, org: str, query: str, *, filt: str | None = None, top_k: int = 20) -> list[dict]:
+def search(
+    base: str, org: str, query: str, *, filt: str | None = None, top_k: int = 20
+) -> list[dict]:
     body = {
         "org_id": org,
         "project_id": PROJECT,
@@ -95,13 +97,22 @@ def prepare(base: str, org: str) -> bool:
     it not ours, and main() will not delete it.
     """
     if project_exists(base, org):
-        print(f"  warning: {org}/{PROJECT} already exists and will not be deleted "
-              "afterwards. If it holds episodes, this run adds to them and the "
-              "match-count check fails. Pass --org for a clean fixture.")
+        print(
+            f"  warning: {org}/{PROJECT} already exists and will not be deleted "
+            "afterwards. If it holds episodes, this run adds to them and the "
+            "match-count check fails. Pass --org for a clean fixture."
+        )
         return False
     try:
-        post(base, "/api/v2/projects", {"org_id": org, "project_id": PROJECT,
-                                        "description": "filter contract fixture"})
+        post(
+            base,
+            "/api/v2/projects",
+            {
+                "org_id": org,
+                "project_id": PROJECT,
+                "description": "filter contract fixture",
+            },
+        )
     except urllib.error.HTTPError as e:
         # Re-creating an identical project answers 201; 409 means it exists
         # with a different config, so it is someone else's.
@@ -121,8 +132,16 @@ def load(base: str, org: str) -> None:
             }
             for i in range(PER_USER)
         ]
-        post(base, "/api/v2/memories", {"org_id": org, "project_id": PROJECT,
-                                        "types": ["episodic"], "messages": messages})
+        post(
+            base,
+            "/api/v2/memories",
+            {
+                "org_id": org,
+                "project_id": PROJECT,
+                "types": ["episodic"],
+                "messages": messages,
+            },
+        )
 
 
 def cats(eps: list[dict]) -> set[str]:
@@ -149,6 +168,7 @@ def checks(base: str, org: str) -> list[tuple[str, str, str]]:
             except Exception as e:  # noqa: BLE001 - report broken checks as failures
                 out.append((name, f"{type(e).__name__}: {e}", ""))
             return fn
+
         return wrap
 
     q = "memory systems store"
@@ -192,24 +212,34 @@ def checks(base: str, org: str) -> list[tuple[str, str, str]]:
                 "a padded top_k would return non-matching rows"
             )
         if producers(eps) != {me} or cats(eps) != {"cat_1"}:
-            raise Fail(f"padding leaked in: {sorted(producers(eps))} {sorted(c for c in cats(eps) if c)}")
+            raise Fail(
+                f"padding leaked in: {sorted(producers(eps))} {sorted(c for c in cats(eps) if c)}"
+            )
 
     @check("AND narrows to the intersection of both terms")
     def _():
-        eps = search(base, org, q, filt=f"producer_id = '{me}' AND (m.category = 'cat_2')")
+        eps = search(
+            base, org, q, filt=f"producer_id = '{me}' AND (m.category = 'cat_2')"
+        )
         if producers(eps) != {me} or cats(eps) != {"cat_2"}:
-            raise Fail(f"got {sorted(producers(eps))} {sorted(c for c in cats(eps) if c)}")
+            raise Fail(
+                f"got {sorted(producers(eps))} {sorted(c for c in cats(eps) if c)}"
+            )
 
     @check("an OR inside a producer scope cannot widen past that producer")
     def _():
         # The regression that shipped: AND binds tighter than OR, so an
         # unparenthesised tail matched every producer.
-        filt = f"producer_id = '{me}' AND (m.category = 'cat_1' OR m.category = 'cat_2')"
+        filt = (
+            f"producer_id = '{me}' AND (m.category = 'cat_1' OR m.category = 'cat_2')"
+        )
         eps = search(base, org, q, filt=filt)
         if producers(eps) != {me}:
             raise Fail(f"OR escaped the producer scope: {sorted(producers(eps))}")
         if not cats(eps) <= {"cat_1", "cat_2"}:
-            raise Fail(f"OR admitted other categories: {sorted(c for c in cats(eps) if c)}")
+            raise Fail(
+                f"OR admitted other categories: {sorted(c for c in cats(eps) if c)}"
+            )
 
     @check("an unparenthesised OR is still the hazard the client guards against")
     def _():
@@ -232,7 +262,9 @@ def checks(base: str, org: str) -> list[tuple[str, str, str]]:
     def _():
         code, body = search_status(base, org, "no_such_field = 'x'")
         if code == 200:
-            raise Fail("accepted an unknown field: a typo would silently widen a filter")
+            raise Fail(
+                "accepted an unknown field: a typo would silently widen a filter"
+            )
         if code != 422:
             raise Fail(f"expected 422, got {code}: {body[:160]}")
 
@@ -245,9 +277,18 @@ def checks(base: str, org: str) -> list[tuple[str, str, str]]:
     @check("the filterable system fields are the ten we document")
     def _():
         _code, body = search_status(base, org, "no_such_field = 'x'")
-        documented = {"content_type", "created_at", "episode_type", "episode_uid",
-                      "produced_for_id", "producer_id", "producer_role",
-                      "sequence_num", "session_key", "timestamp"}
+        documented = {
+            "content_type",
+            "created_at",
+            "episode_type",
+            "episode_uid",
+            "produced_for_id",
+            "producer_id",
+            "producer_role",
+            "sequence_num",
+            "session_key",
+            "timestamp",
+        }
         missing = sorted(f for f in documented if f"'{f}'" not in body)
         if missing:
             raise Fail(f"the server no longer lists {missing} as filterable")
@@ -256,7 +297,9 @@ def checks(base: str, org: str) -> list[tuple[str, str, str]]:
     def _():
         code, _body = search_status(base, org, "category = 'cat_1'")
         if code == 200:
-            raise Fail("a bare metadata key was accepted; the documented form is m.<name>")
+            raise Fail(
+                "a bare metadata key was accepted; the documented form is m.<name>"
+            )
 
     return out
 
@@ -265,11 +308,15 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("base_url")
     ap.add_argument("--org", default="filtercontract")
-    ap.add_argument("--keep", action="store_true", help="leave the fixture project behind")
+    ap.add_argument(
+        "--keep", action="store_true", help="leave the fixture project behind"
+    )
     args = ap.parse_args(argv[1:])
 
-    print(f"  fixture: {len(USERS)} producers x {PER_USER} episodes, {CATEGORIES} categories, "
-          f"one project ({args.org}/{PROJECT})")
+    print(
+        f"  fixture: {len(USERS)} producers x {PER_USER} episodes, {CATEGORIES} categories, "
+        f"one project ({args.org}/{PROJECT})"
+    )
     results: list[tuple[str, str, str]] = []
     setup_error = ""
     # Delete only a project this run created: --org can be pointed at a real
@@ -287,8 +334,11 @@ def main(argv: list[str]) -> int:
     finally:
         if owned and not args.keep:
             try:
-                post(args.base_url, "/api/v2/projects/delete",
-                     {"org_id": args.org, "project_id": PROJECT})
+                post(
+                    args.base_url,
+                    "/api/v2/projects/delete",
+                    {"org_id": args.org, "project_id": PROJECT},
+                )
             except Exception as e:  # noqa: BLE001 - cleanup is best-effort
                 print(f"  note: could not delete the fixture project: {e}")
 

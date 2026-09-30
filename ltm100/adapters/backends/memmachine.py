@@ -173,7 +173,9 @@ class MemMachineClient:
                 # a real failure.
                 if not self.project_id or attempt:
                     raise
-                logger.debug("create %s/%s failed, retrying once: %s", org_id, project_id, e)
+                logger.debug(
+                    "create %s/%s failed, retrying once: %s", org_id, project_id, e
+                )
                 await asyncio.sleep(self._create_retry_delay)
 
     async def add(self, user: UserId, items: list[MemoryItem]) -> list[str]:
@@ -187,7 +189,9 @@ class MemMachineClient:
                 "types": _EPISODIC_TYPES,
                 "messages": [_to_message(it) for it in batch],
             }
-            resp = await self._transport.request("POST", "/api/v2/memories", json=payload)
+            resp = await self._transport.request(
+                "POST", "/api/v2/memories", json=payload
+            )
             for r in resp.get("results", []):
                 uids.append(r.get("uid", ""))
         return uids
@@ -222,15 +226,20 @@ class MemMachineClient:
             search_filter = f"{scope} AND ({search_filter})" if search_filter else scope
         if search_filter:
             payload["filter"] = search_filter
-        resp = await self._transport.request("POST", "/api/v2/memories/search", json=payload)
+        resp = await self._transport.request(
+            "POST", "/api/v2/memories/search", json=payload
+        )
         return _parse_episodes(resp)
 
     async def teardown(self, users: list[UserId], *, delete: bool) -> None:
         if not delete:
             return
         if self.project_id and not self._created_shared:
-            logger.info("leaving %s/%s: it existed before this run",
-                        self.org_prefix, self.project_id)
+            logger.info(
+                "leaving %s/%s: it existed before this run",
+                self.org_prefix,
+                self.project_id,
+            )
             return
         # One delete when the project is shared, for the same reason as setup.
         for user in users[:1] if self.project_id else users:

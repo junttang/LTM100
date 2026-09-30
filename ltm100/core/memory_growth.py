@@ -135,9 +135,7 @@ def evaluate_repeat(
     if metrics["error_rate"] > 0:
         reasons.append(f"search error_rate is {metrics['error_rate']:.6f}")
     if metrics["rejection_rate"] > 0:
-        reasons.append(
-            f"search rejection_rate is {metrics['rejection_rate']:.6f}"
-        )
+        reasons.append(f"search rejection_rate is {metrics['rejection_rate']:.6f}")
     if metrics["empty_rate"] > max_empty_rate:
         reasons.append(
             f"search empty_rate {metrics['empty_rate']:.6f} exceeds "
@@ -279,9 +277,7 @@ def _validate_args(
     if args.queries_per_user <= 0:
         raise ValueError("--queries-per-user must be > 0")
     if args.queries_per_user > counts[0]:
-        raise ValueError(
-            "--queries-per-user cannot exceed the smallest memory count"
-        )
+        raise ValueError("--queries-per-user cannot exceed the smallest memory count")
     if args.repetitions <= 0:
         raise ValueError("--repetitions must be > 0")
     if not 0.0 <= args.max_empty_rate <= 1.0:
@@ -314,8 +310,7 @@ def _validate_dataset_capacity(
     users = dataset.users(args.users, seed=args.seed)
     if len(users) != args.users:
         raise ValueError(
-            f"dataset returned {len(users)} users, but the sweep requires "
-            f"{args.users}"
+            f"dataset returned {len(users)} users, but the sweep requires {args.users}"
         )
     for user in users:
         available = sum(1 for _ in islice(dataset.memory_stream(user), required))

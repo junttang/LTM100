@@ -48,9 +48,7 @@ class SessionCounts:
             "offered": self.offered,
             "admitted": self.admitted,
             "rejected": self.rejected,
-            "rejection_rate": (
-                self.rejected / self.offered if self.offered else 0.0
-            ),
+            "rejection_rate": (self.rejected / self.offered if self.offered else 0.0),
         }
 
 
@@ -254,9 +252,7 @@ class LoadRunner:
             return users
         return users[self.config.proc_index :: self.config.procs]
 
-    async def _closed_loop(
-        self, users: list[UserId], deadline: float | None
-    ) -> None:
+    async def _closed_loop(self, users: list[UserId], deadline: float | None) -> None:
         tasks = []
         for i, user in enumerate(users):
             # Staggered start for ramp-up: user i starts at i*ramp_step.
@@ -295,9 +291,7 @@ class LoadRunner:
         rate = self.config.arrival_rate
         session_tasks: list[asyncio.Task] = []
         next_user = 0
-        active_sessions: dict[UserId, set[int]] = {
-            user: set() for user in users
-        }
+        active_sessions: dict[UserId, set[int]] = {user: set() for user in users}
 
         # Always run the timer to honor the deadline even if all sessions are
         # short; the arrival generator stops at the deadline.
@@ -322,9 +316,7 @@ class LoadRunner:
             group = group_for(user) if group_for is not None else ""
             if self._record_results:
                 self.session_stats.record("offered", group)
-            admission = self._admit_open_session(
-                user, active_sessions
-            )
+            admission = self._admit_open_session(user, active_sessions)
             if admission is None:
                 if self._record_results:
                     self.session_stats.record("rejected", group)
@@ -593,6 +585,7 @@ class LoadRunner:
 
     def _maybe_global_slot(self):
         if self._global_sem is None:
+
             class _Null:
                 async def __aenter__(self_inner):
                     return self_inner

@@ -137,9 +137,7 @@ def test_profile_assignment_is_resolved_before_process_sharding(tmp_path):
 
     reference = _load(_write_profile(tmp_path))
     reference.assign(users, seed=11)
-    assert dict(assignments) == {
-        user: reference.group_for(user).name for user in users
-    }
+    assert dict(assignments) == {user: reference.group_for(user).name for user in users}
 
 
 def test_profile_assignment_survives_spawned_process_sharding(tmp_path):
@@ -255,12 +253,12 @@ def test_bundled_chat_profile_has_expected_tiers():
         "intensive",
     ]
     assert [group.settings.top_k for group in profile.groups] == [20, 50, 100]
-    assert [
-        group.settings.concurrent_sessions for group in profile.groups
-    ] == [1, 2, 5]
-    assert [
-        group.settings.max_sessions_per_user for group in profile.groups
-    ] == [1, 2, 5]
+    assert [group.settings.concurrent_sessions for group in profile.groups] == [1, 2, 5]
+    assert [group.settings.max_sessions_per_user for group in profile.groups] == [
+        1,
+        2,
+        5,
+    ]
     assert profile.counts(100) == [80, 15, 5]
 
 

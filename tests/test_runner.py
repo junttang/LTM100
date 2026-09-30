@@ -56,7 +56,9 @@ class FakeBackend:
         if self.fail_every and self.calls % self.fail_every == 0:
             raise RuntimeError("forced add failure")
         self.adds.append((user, len(items)))
-        await asyncio.sleep(0)  # yield so concurrent users interleave (real backends yield on I/O)
+        await asyncio.sleep(
+            0
+        )  # yield so concurrent users interleave (real backends yield on I/O)
         return [f"{user}-{i}" for i in range(len(items))]
 
     async def search(self, user: UserId, query: QueryItem) -> list[ResultItem]:
@@ -117,7 +119,9 @@ async def test_search_load_top_k_forwarded():
     ds = FakeDataset(n_memories=10)
     backend = TopKCapture()
     cfg = RunConfig(users=1, ops=4, seed=0)
-    runner = LoadRunner(client=backend, dataset=ds, scenario=SearchLoad(top_k=7), config=cfg)
+    runner = LoadRunner(
+        client=backend, dataset=ds, scenario=SearchLoad(top_k=7), config=cfg
+    )
     await runner.run()
     assert seen_top_k == [7, 7, 7, 7]
     # default is 20
@@ -138,8 +142,14 @@ async def test_chat_replay_mixed_emits_both():
         def turn_stream(self, user):
             # 3 user/assistant turn-pairs; each turn has one memory chunk.
             for i in range(3):
-                yield Turn(role="user", items=[MemoryItem(content=f"{user}-ut-{i}", producer=user)])
-                yield Turn(role="assistant", items=[MemoryItem(content=f"{user}-at-{i}", producer=user)])
+                yield Turn(
+                    role="user",
+                    items=[MemoryItem(content=f"{user}-ut-{i}", producer=user)],
+                )
+                yield Turn(
+                    role="assistant",
+                    items=[MemoryItem(content=f"{user}-at-{i}", producer=user)],
+                )
 
     ds = TurnDataset(n_memories=3)
     backend = FakeBackend()

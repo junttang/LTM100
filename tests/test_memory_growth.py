@@ -116,9 +116,7 @@ def test_evaluate_repeat_checks_accounting_and_search_health():
     invalid = _payload(100, empty_rate=0.25)
     invalid["meta"]["preingest_stats"]["input_items"] = 199
     invalid["summary"]["by_op"]["search"]["error_rate"] = 0.1
-    _, reasons = evaluate_repeat(
-        invalid, memory_count=100, users=2, max_empty_rate=0.2
-    )
+    _, reasons = evaluate_repeat(invalid, memory_count=100, users=2, max_empty_rate=0.2)
     assert any("input_items" in reason for reason in reasons)
     assert any("error_rate" in reason for reason in reasons)
     assert any("empty_rate" in reason for reason in reasons)

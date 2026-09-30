@@ -273,9 +273,13 @@ A Scenario decides, per virtual user, the **op mix** and **emit schedule**.
 ```python
 class Scenario(Protocol):
     name: str
-    def plan(self, user: UserId, dataset: DatasetAdapter, rng_state: dict) -> Iterator[Op]:
+
+    def plan(
+        self, user: UserId, dataset: DatasetAdapter, rng_state: dict
+    ) -> Iterator[Op]:
         """Yield the sequence of ops for this user, in order. `rng_state`
         carries the seeded RNG state so schedules are reproducible."""
+
     def validate(self, dataset: DatasetAdapter) -> None: ...
 ```
 

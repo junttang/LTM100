@@ -59,7 +59,23 @@ class SyntheticAdapter:
 
 
 def _filler(rng: random.Random, n: int) -> str:
-    words = ["the", "quick", "brown", "fox", "jumps", "over", "a", "lazy", "dog", "while", "memory", "systems", "store", "and", "retrieve"]
+    words = [
+        "the",
+        "quick",
+        "brown",
+        "fox",
+        "jumps",
+        "over",
+        "a",
+        "lazy",
+        "dog",
+        "while",
+        "memory",
+        "systems",
+        "store",
+        "and",
+        "retrieve",
+    ]
     out = []
     while len(out) < n // 4 + 1:
         out.append(rng.choice(words))

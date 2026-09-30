@@ -164,7 +164,9 @@ def load_chat_profile(
 
     total_share = sum(group.share for group in groups)
     if not math.isclose(total_share, 1.0, rel_tol=0.0, abs_tol=1e-9):
-        raise ValueError(f"chat profile group shares must sum to 1.0, got {total_share:g}")
+        raise ValueError(
+            f"chat profile group shares must sum to 1.0, got {total_share:g}"
+        )
     return ChatProfile(groups)
 
 
@@ -174,9 +176,7 @@ def _settings(raw: dict[str, Any], where: str) -> ChatSettings:
     user_gap = _number(raw["user_gap"], f"{where}.user_gap")
     search_every = _positive_int(raw["search_every"], f"{where}.search_every")
     top_k = _positive_int(raw["top_k"], f"{where}.top_k")
-    sessions = _positive_int(
-        raw["concurrent_sessions"], f"{where}.concurrent_sessions"
-    )
+    sessions = _positive_int(raw["concurrent_sessions"], f"{where}.concurrent_sessions")
     max_sessions = _optional_positive_int(
         raw["max_sessions_per_user"], f"{where}.max_sessions_per_user"
     )

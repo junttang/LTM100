@@ -80,15 +80,25 @@ def _ops_for_user(runner: LoadRunner, user: UserId) -> list[str]:
 async def test_chat_replay_search_before_user_turn_then_adds():
     ds = DialogueDataset()
     backend = RecordingBackend()
-    cfg = RunConfig(users=1, ops=9, seed=0)  # 3 turn-pairs: search + user add + assistant add
-    runner = LoadRunner(client=backend, dataset=ds, scenario=ChatReplay(think=0.0), config=cfg)
+    cfg = RunConfig(
+        users=1, ops=9, seed=0
+    )  # 3 turn-pairs: search + user add + assistant add
+    runner = LoadRunner(
+        client=backend, dataset=ds, scenario=ChatReplay(think=0.0), config=cfg
+    )
     await runner.run()
     seq = _ops_for_user(runner, "u0")
     # Per turn-pair: user turn -> search then add; assistant turn -> add only.
     assert seq == [
-        "search", "add", "add",  # user turn 0 + assistant turn 0
-        "search", "add", "add",  # user turn 1 + assistant turn 1
-        "search", "add", "add",  # user turn 2 + assistant turn 2
+        "search",
+        "add",
+        "add",  # user turn 0 + assistant turn 0
+        "search",
+        "add",
+        "add",  # user turn 1 + assistant turn 1
+        "search",
+        "add",
+        "add",  # user turn 2 + assistant turn 2
     ]
 
 
@@ -105,7 +115,9 @@ async def test_chat_replay_search_query_is_user_turn_content():
     ds = DialogueDataset()
     backend = QueryCapture()
     cfg = RunConfig(users=1, ops=9, seed=0)
-    runner = LoadRunner(client=backend, dataset=ds, scenario=ChatReplay(think=0.0), config=cfg)
+    runner = LoadRunner(
+        client=backend, dataset=ds, scenario=ChatReplay(think=0.0), config=cfg
+    )
     await runner.run()
     assert seen_queries == ["u0 user turn 0", "u0 user turn 1", "u0 user turn 2"]
 
@@ -147,13 +159,21 @@ async def test_chat_replay_count_terminates_at_ops():
     ds = DialogueDataset()
     backend = RecordingBackend()
     cfg = RunConfig(users=1, ops=9, seed=0)
-    runner = LoadRunner(client=backend, dataset=ds, scenario=ChatReplay(think=0.0), config=cfg)
+    runner = LoadRunner(
+        client=backend, dataset=ds, scenario=ChatReplay(think=0.0), config=cfg
+    )
     await runner.run()
     seq = _ops_for_user(runner, "u0")
     assert seq == [
-        "search", "add", "add",
-        "search", "add", "add",
-        "search", "add", "add",
+        "search",
+        "add",
+        "add",
+        "search",
+        "add",
+        "add",
+        "search",
+        "add",
+        "add",
     ]
 
 
@@ -166,7 +186,10 @@ async def test_chat_replay_search_every_2():
     backend = RecordingBackend()
     cfg = RunConfig(users=1, ops=8, seed=0)
     runner = LoadRunner(
-        client=backend, dataset=ds, scenario=ChatReplay(think=0.0, search_every=2), config=cfg
+        client=backend,
+        dataset=ds,
+        scenario=ChatReplay(think=0.0, search_every=2),
+        config=cfg,
     )
     await runner.run()
     seq = _ops_for_user(runner, "u0")
@@ -183,7 +206,9 @@ async def test_chat_replay_wraps_over_duration():
     ds = DialogueDataset()
     backend = RecordingBackend()
     cfg = RunConfig(users=1, duration=2.0, seed=0)
-    runner = LoadRunner(client=backend, dataset=ds, scenario=ChatReplay(think=0.0), config=cfg)
+    runner = LoadRunner(
+        client=backend, dataset=ds, scenario=ChatReplay(think=0.0), config=cfg
+    )
     await asyncio.wait_for(runner.run(), timeout=10.0)
     seq = _ops_for_user(runner, "u0")
     assert len(seq) > 9  # the conversation replayed more than once
@@ -203,7 +228,9 @@ async def test_chat_replay_runs_under_open_model():
         arrival_rate=20.0,
         session_ops=6,
     )
-    runner = LoadRunner(client=backend, dataset=ds, scenario=ChatReplay(think=0.0), config=cfg)
+    runner = LoadRunner(
+        client=backend, dataset=ds, scenario=ChatReplay(think=0.0), config=cfg
+    )
     await asyncio.wait_for(runner.run(), timeout=10.0)
     summary = runner.recorder.summary()
     assert summary["total"] > 0
@@ -235,9 +262,9 @@ async def test_chat_replay_answer_time_and_user_gap_add_idle():
     ds = DialogueDataset()
 
     def total_delay(answer_time: float, user_gap: float) -> float:
-        plan = ChatReplay(
-            think=0.0, answer_time=answer_time, user_gap=user_gap
-        ).plan("u0", ds, {"seed": 0})
+        plan = ChatReplay(think=0.0, answer_time=answer_time, user_gap=user_gap).plan(
+            "u0", ds, {"seed": 0}
+        )
         return sum(op.delay for op in itertools.islice(plan, 9))
 
     baseline = total_delay(answer_time=0.0, user_gap=0.0)
@@ -270,7 +297,15 @@ async def test_chat_replay_answer_time_gaps_after_user_turn_only():
     #           u0    u0a   a1    u2       u2a  a3    u4       u4a  a5
     types = [op.type.value for op in ops]
     assert types == [
-        "search", "add", "add", "search", "add", "add", "search", "add", "add"
+        "search",
+        "add",
+        "add",
+        "search",
+        "add",
+        "add",
+        "search",
+        "add",
+        "add",
     ]
 
     # First user turn's first op (search) has no user_gap. User-turn adds have

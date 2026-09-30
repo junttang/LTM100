@@ -76,7 +76,7 @@ class RestTransport:
                 # results; retrying it would understate the error rate.
                 if attempt >= self.retries:
                     raise
-                await asyncio.sleep(self.retry_backoff * (2 ** attempt))
+                await asyncio.sleep(self.retry_backoff * (2**attempt))
                 attempt += 1
 
     async def request_text(self, method: str, path: str) -> str:
@@ -100,7 +100,7 @@ class RestTransport:
                 # Connection-level retries only, for the same reason as request().
                 if attempt >= self.retries:
                     raise
-                await asyncio.sleep(self.retry_backoff * (2 ** attempt))
+                await asyncio.sleep(self.retry_backoff * (2**attempt))
                 attempt += 1
 
     async def _once(
@@ -117,9 +117,7 @@ class RestTransport:
         ) as resp:
             text = await resp.text()
             if resp.status >= 400:
-                raise RestError(
-                    f"{method} {path} -> {resp.status}: {text[:500]}"
-                )
+                raise RestError(f"{method} {path} -> {resp.status}: {text[:500]}")
             if not text:
                 return {}
             import json as _json

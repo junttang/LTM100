@@ -140,9 +140,7 @@ async def test_sessions_overlap_but_each_session_preserves_operation_order():
     assert {result.session_id for result in results} == {0, 1, 2, 3, 4}
     for session_id in range(5):
         session_ops = [
-            result.type
-            for result in results
-            if result.session_id == session_id
+            result.type for result in results if result.session_id == session_id
         ]
         assert session_ops == [OpType.SEARCH, OpType.ADD, OpType.ADD]
 
@@ -169,12 +167,8 @@ def test_session_lanes_cover_disjoint_source_conversations():
     profile.assign(["u0"], seed=0)
     scenario.validate_run(dataset, ["u0"], model="closed")
 
-    lane_zero = scenario.plan(
-        "u0", dataset, {"seed": 0, "user": "u0", "session_id": 0}
-    )
-    lane_one = scenario.plan(
-        "u0", dataset, {"seed": 0, "user": "u0", "session_id": 1}
-    )
+    lane_zero = scenario.plan("u0", dataset, {"seed": 0, "user": "u0", "session_id": 0})
+    lane_one = scenario.plan("u0", dataset, {"seed": 0, "user": "u0", "session_id": 1})
     queries_zero = [
         next(op for op in lane_zero if op.type is OpType.SEARCH).query.query
         for _ in range(4)
@@ -217,9 +211,7 @@ async def test_open_model_uses_separate_per_user_session_cap():
     runner = LoadRunner(
         client=ConcurrentBackend(delay=0.01),
         dataset=SessionDataset(sessions=5),
-        scenario=ChatReplay(
-            profile=_profile(5, max_sessions_per_user=2)
-        ),
+        scenario=ChatReplay(profile=_profile(5, max_sessions_per_user=2)),
         config=RunConfig(
             users=1,
             duration=0.05,
@@ -271,9 +263,7 @@ async def test_open_session_cap_must_fit_available_source_conversations():
     runner = LoadRunner(
         client=backend,
         dataset=SessionDataset(sessions=2),
-        scenario=ChatReplay(
-            profile=_profile(1, max_sessions_per_user=3)
-        ),
+        scenario=ChatReplay(profile=_profile(1, max_sessions_per_user=3)),
         config=RunConfig(
             users=1,
             duration=0.1,
@@ -294,9 +284,7 @@ async def test_warmup_session_admission_is_excluded_from_measured_stats():
         runner = LoadRunner(
             client=ConcurrentBackend(delay=0.005),
             dataset=SessionDataset(sessions=2),
-            scenario=ChatReplay(
-                profile=_profile(1, max_sessions_per_user=1)
-            ),
+            scenario=ChatReplay(profile=_profile(1, max_sessions_per_user=1)),
             config=RunConfig(
                 users=1,
                 duration=0.04,
@@ -334,6 +322,7 @@ def test_concurrent_sessions_run_in_spawned_process_shards():
     assert len(results) == 12
     assert {result.user_id for result in results} == {"u0", "u1"}
     for user in ("u0", "u1"):
-        assert {
-            result.session_id for result in results if result.user_id == user
-        } == {0, 1}
+        assert {result.session_id for result in results if result.user_id == user} == {
+            0,
+            1,
+        }

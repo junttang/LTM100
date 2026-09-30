@@ -137,6 +137,4 @@ async def test_teardown_deletes_only_requested_user(mem0_server):
         await client.add("u1", [MemoryItem("one")])
         await client.teardown(["u0"], delete=True)
         assert await client.search("u0", QueryItem("q")) == []
-        assert [r.content for r in await client.search("u1", QueryItem("q"))] == [
-            "one"
-        ]
+        assert [r.content for r in await client.search("u1", QueryItem("q"))] == ["one"]
