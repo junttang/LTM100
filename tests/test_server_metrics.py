@@ -10,6 +10,7 @@ use.
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import math
 from typing import ClassVar
@@ -22,12 +23,17 @@ from ltm100.common import MemoryItem
 from ltm100.core.config import RunConfig
 from ltm100.core.runner import LoadRunner
 from ltm100.core.scenarios import AddLoad
-from ltm100.metrics.report import write_server_metrics, write_summary_json
+from ltm100.metrics.report import (
+    write_server_metrics,
+    write_server_metrics_timeseries,
+    write_summary_json,
+)
 from ltm100.metrics.server_metrics import (
     SnapshotCollector,
     build_report,
     diff,
     finish,
+    finish_timeseries,
     parse_prometheus,
     quantile,
 )
@@ -296,6 +302,138 @@ async def test_collector_captures_both_and_never_raises():
     assert len(bad.errors) == 2
 
 
+@pytest.mark.asyncio
+async def test_collector_samples_periodically_and_keeps_final_partial_interval():
+    collector = SnapshotCollector(
+        _FakeMetricsClient(text=_EXPOSITION), interval_seconds=0.01
+    )
+    await collector.start()
+    await asyncio.sleep(0.027)
+    await collector.end()
+
+    capture = collector.result()
+    assert len(capture["snapshots"]) >= 4  # start, two periodic, final
+    assert capture["snapshots"][0]["elapsed_s"] == 0.0
+    assert capture["snapshots"][-1]["elapsed_s"] >= 0.02
+    assert capture["snapshots"][-1]["elapsed_s"] < 0.1
+    assert all(snapshot["text"] == _EXPOSITION for snapshot in capture["snapshots"])
+
+
+def test_server_metrics_timeseries_uses_adjacent_deltas_and_does_not_bridge_failure():
+    snapshots = [
+        {
+            "captured_at": 100.0,
+            "elapsed_s": 0.0,
+            "text": _phase_lines(
+                "event_memory_query_phase_seconds",
+                "vector_query",
+                0,
+                0.0,
+                {"0.1": 0},
+            ),
+            "error": None,
+        },
+        {
+            "captured_at": 110.0,
+            "elapsed_s": 10.0,
+            "text": _phase_lines(
+                "event_memory_query_phase_seconds",
+                "vector_query",
+                5,
+                0.25,
+                {"0.1": 5},
+            ),
+            "error": None,
+        },
+        {
+            "captured_at": 120.0,
+            "elapsed_s": 20.0,
+            "text": None,
+            "error": "interval 2 snapshot failed: RuntimeError: boom",
+        },
+        {
+            "captured_at": 127.0,
+            "elapsed_s": 27.0,
+            "text": _phase_lines(
+                "event_memory_query_phase_seconds",
+                "vector_query",
+                9,
+                0.45,
+                {"0.1": 9},
+            ),
+            "error": None,
+        },
+    ]
+    report = finish_timeseries(
+        {
+            "interval_seconds": 10.0,
+            "snapshots": snapshots,
+            "errors": [],
+        }
+    )
+
+    assert report["status"] == "partial"
+    assert report["intervals"] == 3
+    assert report["failed_scrapes"] == 1
+    vector = next(
+        row
+        for row in report["rows"]
+        if row["bucket_index"] == 0
+        and row["series"] == 'query_phase{phase="vector_query"}'
+    )
+    assert vector["status"] == "ok"
+    assert vector["delta_count"] == 5
+    assert vector["mean_s"] == pytest.approx(0.05)
+    failed = [row for row in report["rows"] if row["status"] == "failed"]
+    assert [row["bucket_index"] for row in failed] == [1, 2]
+    assert not any(
+        row["bucket_index"] == 2 and row.get("delta_count") == 4
+        for row in report["rows"]
+    )
+
+
+def test_server_metrics_timeseries_counts_partition_whole_window():
+    snapshots = []
+    for index, count in enumerate((0, 5, 9)):
+        snapshots.append(
+            {
+                "captured_at": 100.0 + index * 10,
+                "elapsed_s": float(index * 10),
+                "text": _phase_lines(
+                    "event_memory_encode_events_phase_seconds",
+                    "embedding",
+                    count,
+                    count * 0.05,
+                    {"0.1": count},
+                ),
+                "error": None,
+            }
+        )
+    capture = {
+        "before": snapshots[0]["text"],
+        "after": snapshots[-1]["text"],
+        "interval_seconds": 10.0,
+        "snapshots": snapshots,
+        "errors": [],
+    }
+
+    aggregate = finish(capture, window="measured")
+    trace = finish_timeseries(capture)
+    aggregate_row = next(
+        row
+        for row in aggregate["rows"]
+        if row["series"] == 'encode_phase{phase="embedding"}'
+    )
+    trace_rows = [
+        row
+        for row in trace["rows"]
+        if row["series"] == 'encode_phase{phase="embedding"}'
+    ]
+    assert aggregate_row["delta_count"] == 9
+    assert [row["delta_count"] for row in trace_rows] == [5, 4]
+    assert sum(row["delta_count"] for row in trace_rows) == 9
+
+
 # -- runner measure hooks ---------------------------------------------------------
 
 
@@ -527,6 +665,39 @@ def test_write_server_metrics_files(tmp_path):
     assert raw == {"before": [], "after": []}
 
 
+def test_write_server_metrics_timeseries_csv(tmp_path):
+    path = tmp_path / "server_metrics_timeseries.csv"
+    write_server_metrics_timeseries(
+        [
+            {
+                "bucket_index": 0,
+                "elapsed_start_s": 0.0,
+                "elapsed_end_s": 10.0,
+                "interval_seconds": 10.0,
+                "bucket_started_at": 100.0,
+                "bucket_ended_at": 110.0,
+                "series": 'query_phase{phase="vector_query"}',
+                "status": "ok",
+                "delta_count": 5,
+                "delta_sum_s": 0.25,
+                "mean_s": 0.05,
+                "p50": 0.04,
+                "p90": 0.08,
+                "p99": 0.1,
+                "note": "",
+            }
+        ],
+        path,
+    )
+
+    with open(path, newline="", encoding="utf-8") as file:
+        row = next(csv.DictReader(file))
+    assert row["bucket_started_at"] == "1970-01-01T00:01:40+00:00"
+    assert row["series"] == 'query_phase{phase="vector_query"}'
+    assert row["mean_s"] == "0.050000"
+    assert row["p99_s"] == "0.100000"
+
+
 # -- CLI plumbing ----------------------------------------------------------------------
 
 
@@ -550,6 +721,194 @@ def test_cli_parses_server_metrics_flag():
         ["run", "--config", "x.yaml", "--scenario", "add-load", "--ops", "5"]
     )
     assert args.server_metrics is False
+
+    args = build_parser().parse_args(
+        [
+            "run",
+            "--config",
+            "x.yaml",
+            "--scenario",
+            "add-load",
+            "--ops",
+            "5",
+            "--server-metrics",
+            "--server-metrics-interval",
+            "10",
+            "--output",
+            "out",
+        ]
+    )
+    assert args.server_metrics_interval == 10.0
+
+
+def test_server_metrics_interval_requires_flag_output_and_positive_value(
+    tmp_path, monkeypatch
+):
+    import yaml
+
+    from ltm100 import cli
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "dataset": {"name": "synthetic"},
+                "backend": {"name": "memmachine", "base_url": "http://unused"},
+            }
+        )
+    )
+    monkeypatch.setattr(cli, "_backend_build", lambda cfg: pytest.fail("too late"))
+    common = [
+        "run",
+        "--config",
+        str(config),
+        "--scenario",
+        "add-load",
+        "--ops",
+        "1",
+    ]
+
+    args = cli.build_parser().parse_args(
+        [*common, "--server-metrics-interval", "1", "--output", str(tmp_path / "o")]
+    )
+    with pytest.raises(ValueError, match="requires --server-metrics"):
+        cli._run(args)
+
+    args = cli.build_parser().parse_args(
+        [*common, "--server-metrics", "--server-metrics-interval", "1"]
+    )
+    with pytest.raises(ValueError, match="requires --output"):
+        cli._run(args)
+
+    args = cli.build_parser().parse_args(
+        [
+            *common,
+            "--server-metrics",
+            "--server-metrics-interval",
+            "0",
+            "--output",
+            str(tmp_path / "o"),
+        ]
+    )
+    with pytest.raises(ValueError, match="finite number > 0"):
+        cli._run(args)
+
+
+def test_cli_writes_server_metrics_timeseries_for_synchronized_window(
+    tmp_path, monkeypatch, capsys
+):
+    import yaml
+
+    from ltm100 import cli
+    from ltm100.core.multiproc import ShardResult
+    from ltm100.core.runner import SessionAdmissionStats
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "dataset": {"name": "synthetic"},
+                "backend": {"name": "memmachine", "base_url": "http://unused"},
+            }
+        )
+    )
+    before = _phase_lines(
+        "event_memory_encode_events_phase_seconds",
+        "embedding",
+        0,
+        0.0,
+        {"0.1": 0},
+    )
+    after = _phase_lines(
+        "event_memory_encode_events_phase_seconds",
+        "embedding",
+        4,
+        0.2,
+        {"0.1": 4},
+    )
+
+    class FakeCollector:
+        def __init__(self, backend):
+            self.interval_seconds = None
+
+        async def start(self):
+            return None
+
+        async def end(self):
+            return None
+
+        def result(self):
+            return {
+                "before": before,
+                "after": after,
+                "errors": [],
+                "interval_seconds": self.interval_seconds,
+                "snapshots": [
+                    {
+                        "captured_at": 100.0,
+                        "elapsed_s": 0.0,
+                        "text": before,
+                        "error": None,
+                    },
+                    {
+                        "captured_at": 110.0,
+                        "elapsed_s": 10.0,
+                        "text": after,
+                        "error": None,
+                    },
+                ],
+            }
+
+    def fake_run_shards(entry, args, procs, **kwargs):
+        kwargs["on_measure_start"]()
+        kwargs["on_measure_end"]()
+        return ShardResult(
+            [],
+            SessionAdmissionStats(),
+            measurement_started_at=100.0,
+            measurement_ended_at=110.0,
+        )
+
+    monkeypatch.setattr(cli, "_backend_build", lambda cfg: {})
+    monkeypatch.setattr(cli, "_probe_server_metrics", lambda cfg: {"enabled": True})
+    monkeypatch.setattr(cli, "SnapshotCollector", FakeCollector)
+    monkeypatch.setattr(cli, "run_shards", fake_run_shards)
+    output = tmp_path / "out"
+    args = cli.build_parser().parse_args(
+        [
+            "run",
+            "--config",
+            str(config),
+            "--scenario",
+            "add-load",
+            "--users",
+            "2",
+            "--ops",
+            "4",
+            "--procs",
+            "2",
+            "--server-metrics",
+            "--server-metrics-interval",
+            "10",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert cli._run(args) == 0
+    payload = json.loads(capsys.readouterr().out.split("\nreports written")[0])
+    assert payload["meta"]["server_metrics_interval"] == 10.0
+    trace = payload["server_metrics"]["timeseries"]
+    assert trace["status"] == "ok" and trace["intervals"] == 1
+    with open(
+        output / "server_metrics_timeseries.csv", newline="", encoding="utf-8"
+    ) as file:
+        rows = list(csv.DictReader(file))
+    embedding = next(
+        row for row in rows if row["series"] == 'encode_phase{phase="embedding"}'
+    )
+    assert embedding["delta_count"] == "4"
+    assert embedding["mean_s"] == "0.050000"
 
 
 def test_multiprocess_server_metrics_use_synchronized_measured_window(

@@ -27,7 +27,11 @@ true value exists but exceeds the finest bucket the server publishes.
 
 from __future__ import annotations
 
+import asyncio
 import math
+import threading
+import time
+from itertools import pairwise
 from typing import Any
 
 # A parsed sample is keyed by (metric name, sorted label pairs). Labels stay
@@ -417,34 +421,114 @@ class SnapshotCollector:
     observer's own keep-alive sit on the server for minutes.
     """
 
-    def __init__(self, client: Any) -> None:
+    def __init__(
+        self,
+        client: Any,
+        *,
+        interval_seconds: float | None = None,
+    ) -> None:
+        if interval_seconds is not None and (
+            not math.isfinite(interval_seconds) or interval_seconds <= 0
+        ):
+            raise ValueError("interval_seconds must be a finite number > 0")
         self._client = client
+        self.interval_seconds = interval_seconds
         self.before: str | None = None
         self.after: str | None = None
         self.errors: list[str] = []
+        self._snapshots: list[dict[str, Any]] = []
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._started_monotonic: float | None = None
 
     async def start(self) -> None:
-        await self._take("before")
+        text, error = await self._scrape("before")
+        self.before = text
+        self._started_monotonic = time.monotonic()
+        self._append_snapshot(text=text, error=error, elapsed=0.0)
+        if self.interval_seconds is not None:
+            self._stop.clear()
+            self._thread = threading.Thread(
+                target=self._sample_loop,
+                name="ltm100-server-metrics",
+                daemon=True,
+            )
+            self._thread.start()
 
     async def end(self) -> None:
-        await self._take("after")
+        self._stop.set()
+        if self._thread is not None:
+            await asyncio.to_thread(self._thread.join)
+            self._thread = None
+        text, error = await self._scrape("after")
+        self.after = text
+        started = self._started_monotonic
+        elapsed = time.monotonic() - started if started is not None else 0.0
+        self._append_snapshot(text=text, error=error, elapsed=elapsed)
 
-    async def _take(self, slot: str) -> None:
+    async def _scrape(self, slot: str) -> tuple[str | None, str | None]:
         try:
             async with self._client:
                 text = await self._client.server_metrics_snapshot()
         except Exception as e:  # noqa: BLE001 - metrics never fail the run
-            self.errors.append(f"{slot} snapshot failed: {type(e).__name__}: {e}")
-            return
+            error = f"{slot} snapshot failed: {type(e).__name__}: {e}"
+            with self._lock:
+                self.errors.append(error)
+            return None, error
         if not isinstance(text, str):
-            self.errors.append(
-                f"{slot} snapshot returned {type(text).__name__}, expected str"
-            )
-            return
-        setattr(self, slot, text)
+            error = f"{slot} snapshot returned {type(text).__name__}, expected str"
+            with self._lock:
+                self.errors.append(error)
+            return None, error
+        return text, None
+
+    def _sample_loop(self) -> None:
+        assert self.interval_seconds is not None
+        assert self._started_monotonic is not None
+        sequence = 1
+        while True:
+            deadline = self._started_monotonic + sequence * self.interval_seconds
+            if self._stop.wait(max(0.0, deadline - time.monotonic())):
+                return
+            text, error = asyncio.run(self._scrape(f"interval {sequence}"))
+            if self._stop.is_set():
+                return
+            elapsed = time.monotonic() - self._started_monotonic
+            self._append_snapshot(text=text, error=error, elapsed=elapsed)
+            # A slow scrape may overrun one or more scheduled boundaries. Skip
+            # those boundaries rather than firing catch-up requests back to
+            # back and adding observer load exactly when the server is slow.
+            next_boundary = math.floor(elapsed / self.interval_seconds) + 1
+            sequence = max(sequence + 1, next_boundary)
+
+    def _append_snapshot(
+        self,
+        *,
+        text: str | None,
+        error: str | None,
+        elapsed: float,
+    ) -> None:
+        snapshot = {
+            "captured_at": time.time(),
+            "elapsed_s": max(0.0, elapsed),
+            "text": text,
+            "error": error,
+        }
+        with self._lock:
+            self._snapshots.append(snapshot)
 
     def result(self) -> dict[str, Any]:
-        return {"before": self.before, "after": self.after, "errors": list(self.errors)}
+        with self._lock:
+            errors = list(self.errors)
+            snapshots = [dict(snapshot) for snapshot in self._snapshots]
+        return {
+            "before": self.before,
+            "after": self.after,
+            "errors": errors,
+            "interval_seconds": self.interval_seconds,
+            "snapshots": snapshots,
+        }
 
 
 def finish(capture: dict[str, Any], *, window: str) -> dict[str, Any]:
@@ -467,6 +551,84 @@ def finish(capture: dict[str, Any], *, window: str) -> dict[str, Any]:
     return report
 
 
+def finish_timeseries(capture: dict[str, Any]) -> dict[str, Any]:
+    """Build adjacent-snapshot latency deltas for periodic server metrics.
+
+    A failed scrape invalidates only intervals touching that boundary. It is
+    never bridged with the next successful scrape because doing so would label
+    a multi-interval delta as one interval and distort the trace.
+    """
+    interval = capture.get("interval_seconds")
+    snapshots = capture.get("snapshots") or []
+    rows: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    failed_scrapes = sum(snapshot.get("text") is None for snapshot in snapshots)
+    valid_intervals = 0
+
+    for index, (before, after) in enumerate(pairwise(snapshots)):
+        elapsed_start = float(before.get("elapsed_s", 0.0))
+        elapsed_end = float(after.get("elapsed_s", elapsed_start))
+        common = {
+            "bucket_index": index,
+            "elapsed_start_s": elapsed_start,
+            "elapsed_end_s": elapsed_end,
+            "interval_seconds": max(0.0, elapsed_end - elapsed_start),
+            "bucket_started_at": before.get("captured_at"),
+            "bucket_ended_at": after.get("captured_at"),
+        }
+        before_text, after_text = before.get("text"), after.get("text")
+        if before_text is None or after_text is None:
+            note = (
+                "; ".join(
+                    value
+                    for value in (before.get("error"), after.get("error"))
+                    if value
+                )
+                or "snapshot unavailable"
+            )
+            warnings.append(f"interval {index}: {note}")
+            rows.append(
+                {
+                    **common,
+                    "series": "",
+                    "status": "failed",
+                    "delta_count": None,
+                    "delta_sum_s": None,
+                    "mean_s": None,
+                    "p50": None,
+                    "p90": None,
+                    "p99": None,
+                    "note": note,
+                }
+            )
+            continue
+
+        report = build_report(before_text, after_text, window=f"interval_{index}")
+        valid_intervals += 1
+        for report_row in report["rows"]:
+            note = report_row.get("note", "")
+            status = "reset" if note.startswith("counter reset") else "ok"
+            rows.append({**common, **report_row, "status": status})
+
+    if len(snapshots) < 2 or valid_intervals == 0:
+        status = "failed"
+        warnings.append("server metrics time series has no valid snapshot interval")
+    elif failed_scrapes:
+        status = "partial"
+    else:
+        status = "ok"
+    return {
+        "enabled": bool(interval is not None and valid_intervals > 0),
+        "status": status,
+        "interval_seconds": interval,
+        "intervals": max(0, len(snapshots) - 1),
+        "valid_intervals": valid_intervals,
+        "failed_scrapes": failed_scrapes,
+        "warnings": warnings,
+        "rows": rows,
+    }
+
+
 __all__ = [
     "REPORT_SERIES",
     "SampleKey",
@@ -474,6 +636,7 @@ __all__ = [
     "build_report",
     "diff",
     "finish",
+    "finish_timeseries",
     "histogram_delta",
     "parse_prometheus",
     "quantile",

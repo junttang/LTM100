@@ -35,11 +35,12 @@ from ltm100.metrics.aggregate import aggregate
 from ltm100.metrics.report import (
     write_raw_ndjson,
     write_server_metrics,
+    write_server_metrics_timeseries,
     write_summary_csv,
     write_summary_json,
     write_timeseries_csv,
 )
-from ltm100.metrics.server_metrics import SnapshotCollector, finish
+from ltm100.metrics.server_metrics import SnapshotCollector, finish, finish_timeseries
 from ltm100.metrics.timeseries import aggregate_timeseries
 
 logger = logging.getLogger(__name__)
@@ -306,6 +307,9 @@ def _run_metadata(
     time_series_interval = getattr(args, "time_series_interval", None)
     if time_series_interval is not None:
         meta["time_series_interval"] = time_series_interval
+    server_metrics_interval = getattr(args, "server_metrics_interval", None)
+    if server_metrics_interval is not None:
+        meta["server_metrics_interval"] = server_metrics_interval
 
     if args.model == "open":
         meta.update(
@@ -390,6 +394,14 @@ def _run(args: argparse.Namespace) -> int:
             raise ValueError("--time-series-interval must be a finite number > 0")
         if not args.output:
             raise ValueError("--time-series-interval requires --output")
+    server_metrics_interval = getattr(args, "server_metrics_interval", None)
+    if server_metrics_interval is not None:
+        if not math.isfinite(server_metrics_interval) or server_metrics_interval <= 0:
+            raise ValueError("--server-metrics-interval must be a finite number > 0")
+        if not args.server_metrics:
+            raise ValueError("--server-metrics-interval requires --server-metrics")
+        if not args.output:
+            raise ValueError("--server-metrics-interval requires --output")
     # Validate scenario-specific files and options before probing or mutating
     # the backend. Each shard rebuilds the scenario it will actually run.
     _build_scenario(args)
@@ -464,6 +476,8 @@ def _run(args: argparse.Namespace) -> int:
             collector = SnapshotCollector(build_backend(cfg.backend))
         else:
             collector = SnapshotCollector(build_backend(cfg.backend))
+        if collector is not None and server_metrics_interval is not None:
+            collector.interval_seconds = server_metrics_interval
 
     global _server_metrics_collector
     _server_metrics_collector = collector if run_cfg.procs == 1 else None
@@ -496,8 +510,38 @@ def _run(args: argparse.Namespace) -> int:
     finally:
         _server_metrics_collector = None
 
+    server_metrics_timeseries: dict[str, Any] | None = None
     if collector is not None:
-        server_metrics = finish(collector.result(), window="measured")
+        capture = collector.result()
+        server_metrics = finish(capture, window="measured")
+        if server_metrics_interval is not None:
+            server_metrics_timeseries = finish_timeseries(capture)
+            server_metrics["timeseries"] = {
+                key: value
+                for key, value in server_metrics_timeseries.items()
+                if key != "rows"
+            }
+    elif server_metrics_interval is not None:
+        server_metrics_timeseries = {
+            "enabled": False,
+            "status": server_metrics.get("status", "failed")
+            if server_metrics
+            else "failed",
+            "interval_seconds": server_metrics_interval,
+            "intervals": 0,
+            "valid_intervals": 0,
+            "failed_scrapes": 0,
+            "warnings": list(server_metrics.get("warnings", []))
+            if server_metrics
+            else [],
+            "rows": [],
+        }
+        if server_metrics is not None:
+            server_metrics["timeseries"] = {
+                key: value
+                for key, value in server_metrics_timeseries.items()
+                if key != "rows"
+            }
 
     if isinstance(shard_result, ShardResult):
         raw = shard_result.results
@@ -550,6 +594,11 @@ def _run(args: argparse.Namespace) -> int:
         write_summary_csv(summary, f"{out}/summary.csv")
         if server_metrics is not None:
             write_server_metrics(server_metrics, out)
+        if server_metrics_timeseries is not None:
+            write_server_metrics_timeseries(
+                server_metrics_timeseries["rows"],
+                f"{out}/server_metrics_timeseries.csv",
+            )
         if args.raw:
             write_raw_ndjson(raw, f"{out}/raw.ndjson")
         if time_series_interval is not None:
@@ -756,6 +805,13 @@ def build_parser() -> argparse.ArgumentParser:
         "REST adapter; adapters without the query warn and continue "
         "without it)",
     )
+    run.add_argument(
+        "--server-metrics-interval",
+        type=float,
+        default=None,
+        help="with --server-metrics, write server_metrics_timeseries.csv from "
+        "Prometheus histogram deltas sampled every N measured seconds",
+    )
     run.add_argument("--output", default=None, help="output dir for reports")
     run.add_argument("--raw", action="store_true", help="also write raw.ndjson")
     run.add_argument(
@@ -828,6 +884,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--server-metrics",
         action="store_true",
         help="collect backend-provided server metrics for every repetition",
+    )
+    growth.add_argument(
+        "--server-metrics-interval",
+        type=float,
+        default=None,
+        help="with --server-metrics, collect fixed-interval server latency "
+        "breakdowns for every repetition",
     )
     growth.add_argument(
         "--raw", action="store_true", help="write raw.ndjson for every repetition"

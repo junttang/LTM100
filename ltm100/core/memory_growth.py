@@ -12,6 +12,7 @@ import argparse
 import csv
 import json
 import logging
+import math
 from collections.abc import Callable, Iterator
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -248,6 +249,7 @@ def _run_args(
         filter=args.filter,
         procs=args.procs,
         server_metrics=args.server_metrics,
+        server_metrics_interval=getattr(args, "server_metrics_interval", None),
         output=str(output),
         raw=args.raw,
         time_series_interval=None,
@@ -289,6 +291,12 @@ def _validate_args(
         raise ValueError("--top-k must be > 0")
     if args.expand < 0:
         raise ValueError("--expand must be >= 0")
+    server_metrics_interval = getattr(args, "server_metrics_interval", None)
+    if server_metrics_interval is not None:
+        if not math.isfinite(server_metrics_interval) or server_metrics_interval <= 0:
+            raise ValueError("--server-metrics-interval must be a finite number > 0")
+        if not args.server_metrics:
+            raise ValueError("--server-metrics-interval requires --server-metrics")
     cfg = load_config(args.config)
     if cfg.backend.options.get("project_id"):
         raise ValueError(
@@ -365,6 +373,7 @@ def run_memory_growth(
             "repetitions": args.repetitions,
             "max_empty_rate": args.max_empty_rate,
             "server_metrics": args.server_metrics,
+            "server_metrics_interval": getattr(args, "server_metrics_interval", None),
             "raw": args.raw,
         },
         "points": [],

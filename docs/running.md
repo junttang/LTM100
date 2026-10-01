@@ -258,6 +258,9 @@ ltm100 run --config examples/memmachine.yaml \
 - `--chat-profile PATH`: group-specific `chat-replay` parameters and session
   controls.
 - `--server-metrics`: collect backend-provided server latency metrics.
+- `--server-metrics-interval SECONDS`: with `--server-metrics`, write
+  fixed-interval server latency breakdowns to `server_metrics_timeseries.csv`.
+  Requires `--output`.
 - `--raw`: write per-request `raw.ndjson`.
 - `--time-series-interval SECONDS`: write client-observed E2E performance to
   `timeseries.csv` in fixed elapsed-time intervals. Requires `--output` but
@@ -326,6 +329,11 @@ With `--output DIR`, LTM100 writes:
   overall latency is blank because add and search distributions are not mixed.
 - `server_metrics.csv` and `server_metrics_raw.json`: server-side latency
   deltas when `--server-metrics` is enabled and supported by the adapter.
+- `server_metrics_timeseries.csv`: adjacent-snapshot server histogram deltas
+  when `--server-metrics-interval SECONDS` is set. Each interval has separate
+  rows for MemMachine's add phases, search phases, and add/search HTTP paths,
+  with count, mean, p50, p90, and p99 latency. A failed scrape marks the
+  affected interval instead of combining it with a later successful scrape.
 
 For example, a five-second time series can be collected without retaining
 every per-request record:
@@ -334,6 +342,7 @@ every per-request record:
 ltm100 run --config examples/memmachine.yaml \
     --scenario search-load --users 20 --duration 60 --preingest \
     --global-concurrency 20 --time-series-interval 5 \
+    --server-metrics --server-metrics-interval 5 \
     --output out/search-timeseries
 ```
 
@@ -352,6 +361,15 @@ backend state but do not consume `--duration`/`--ops` or appear in summaries,
 raw output, or the time series. Server metrics bracket the same measured
 window. With multiple processes, time-series runs synchronize workers at both
 measurement boundaries, as do warm-up and server-metrics runs.
+
+Periodic server snapshots run on a dedicated sampler thread so the load
+generator's asyncio loop does not wait between scrapes. Sampling uses fixed
+monotonic deadlines rather than sleeping relative to the previous scrape; if
+a scrape itself overruns one or more deadlines, those boundaries are skipped
+instead of issuing catch-up scrapes. The final partial interval is retained.
+Server percentiles remain estimates interpolated from the server's Prometheus
+histogram buckets. Use an interval long enough to collect a meaningful sample
+count; 5--10 seconds is a practical starting point.
 
 Server-side resource utilization such as CPU, memory, storage, and network is
 outside LTM100's client report and should be collected from the system under

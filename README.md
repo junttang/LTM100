@@ -107,7 +107,8 @@ With `--output DIR`, a run writes `summary.json` and `summary.csv`. Use
 `--time-series-interval SECONDS` for client-observed E2E `timeseries.csv`,
 `--raw` for per-request `raw.ndjson`, and `--server-metrics` for
 backend-provided server latency breakdowns when the selected adapter supports
-them.
+them. Add `--server-metrics-interval SECONDS` to trace those server-side
+breakdowns over the measured window.
 
 Successful throughput and latency are reported separately from backend errors
 and queue rejections, so overload cannot inflate QPS or lower service-latency
