@@ -259,6 +259,9 @@ ltm100 run --config examples/memmachine.yaml \
   controls.
 - `--server-metrics`: collect backend-provided server latency metrics.
 - `--raw`: write per-request `raw.ndjson`.
+- `--time-series-interval SECONDS`: write client-observed E2E performance to
+  `timeseries.csv` in fixed elapsed-time intervals. Requires `--output` but
+  does not require `--raw`.
 - `--no-delete-on-exit`: preserve per-run backend state.
 
 Run `ltm100 run --help` for the complete and authoritative option list.
@@ -314,16 +317,41 @@ With `--output DIR`, LTM100 writes:
 - `raw.ndjson`: per-request records when `--raw` is enabled.
   Profiled records include `group` and `session_id`; the latter identifies a
   reusable per-user conversation lane, not a backend isolation key.
+- `timeseries.csv`: fixed-interval client-observed E2E metrics when
+  `--time-series-interval SECONDS` is set. Each interval has separate rows for
+  add and search plus an `all` throughput row. It records dispatched starts,
+  completed requests, successful throughput, errors, rejections, in-flight
+  requests at the interval boundary, and successful-request latency
+  statistics. Empty intervals remain in the file so stalls are visible;
+  overall latency is blank because add and search distributions are not mixed.
 - `server_metrics.csv` and `server_metrics_raw.json`: server-side latency
   deltas when `--server-metrics` is enabled and supported by the adapter.
 
-`meta` records the whole-run configuration, server build, and timestamps that
-bracket the complete run lifecycle. `--warmup N` runs the selected workload
-for N seconds before measurement; those requests update backend state but do
-not consume `--duration`/`--ops` or appear in summaries and raw output. Server
-metrics bracket the same measured window. With multiple processes, workers
-synchronize after warm-up so the parent snapshots the server only after every
-shard is ready, and again before any shard begins teardown.
+For example, a five-second time series can be collected without retaining
+every per-request record:
+
+```sh
+ltm100 run --config examples/memmachine.yaml \
+    --scenario search-load --users 20 --duration 60 --preingest \
+    --global-concurrency 20 --time-series-interval 5 \
+    --output out/search-timeseries
+```
+
+Request latency starts immediately before the backend client call and ends
+when that call returns or raises. Scenario delays and waiting for an LTM100
+global-concurrency slot are excluded; network time and all server-side work
+after dispatch are included. A request's latency is assigned to its completion
+interval, while `started`, `completed`, and `in_flight_end` expose backlog and
+stall behavior. Percentiles use successful completions only.
+
+`meta` records the whole-run configuration, server build, timestamps that
+bracket the complete run lifecycle, and the exact
+`measurement_started_at`/`measurement_ended_at` boundaries. `--warmup N` runs
+the selected workload for N seconds before measurement; those requests update
+backend state but do not consume `--duration`/`--ops` or appear in summaries,
+raw output, or the time series. Server metrics bracket the same measured
+window. With multiple processes, time-series runs synchronize workers at both
+measurement boundaries, as do warm-up and server-metrics runs.
 
 Server-side resource utilization such as CPU, memory, storage, and network is
 outside LTM100's client report and should be collected from the system under

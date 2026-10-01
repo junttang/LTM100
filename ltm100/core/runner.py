@@ -151,6 +151,8 @@ class LoadRunner:
         self._record_results = True
         self.session_stats = SessionAdmissionStats()
         self.preingest_stats = PreingestStats()
+        self.measurement_started_at: float | None = None
+        self.measurement_ended_at: float | None = None
 
     async def run(self) -> list[OpResult]:
         all_users = self._configure_users(
@@ -197,7 +199,9 @@ class LoadRunner:
         await self._call_hook(self.on_measure_start, "on_measure_start")
 
         self._record_results = True
+        self.measurement_started_at = time.time()
         await self._run_workload(duration=self.config.duration)
+        self.measurement_ended_at = time.time()
 
         await self._call_hook(self.on_measure_end, "on_measure_end")
         return self.recorder.raw()

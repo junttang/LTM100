@@ -412,9 +412,10 @@ the run, and every histogram reported as the difference.
 7. **Drain** — in-flight requests complete (or timeout).
 8. **Teardown** (`LTMClient.teardown`, `delete=True`) — optional per run;
    also exposed as a standalone cleanup command.
-9. **Aggregate & report** — summary JSON/CSV + optional raw NDJSON + optional
-   server-metrics section (§7.3), whose snapshots are taken inside step 6's
-   boundaries when `--server-metrics` is on.
+9. **Aggregate & report** — summary JSON/CSV + optional fixed-interval E2E
+   time series + optional raw NDJSON + optional server-metrics section (§7.3),
+   whose snapshots are taken inside step 6's boundaries when
+   `--server-metrics` is on.
 
 Termination: count-based (total K ops) **or** time-based (T seconds). Ramp-up
 is optional; warm-up time is excluded from steady-state metrics.
@@ -430,7 +431,8 @@ dataset adapter, LTM client adapter, defaults.
 `--arrival-rate`, `--session-ops`, `--queue-bound`, `--search-weight`,
 `--top-k`, `--query-limit`, `--think`, `--search-every`, `--answer-time`,
 `--user-gap`, `--expand`, `--filter`, `--procs`, `--raw`,
-`--no-delete-on-exit`, `--output`. The MCP import is lazy, so `--help` works
+`--time-series-interval`, `--no-delete-on-exit`, `--output`. The MCP import is
+lazy, so `--help` works
 without the `[mcp]` extra. See `ltm100 run --help` for the authoritative list.
 
 Connection retries and the streaming JSON loader are backend/dataset

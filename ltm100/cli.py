@@ -16,6 +16,7 @@ import asyncio
 import inspect
 import json
 import logging
+import math
 import sys
 from datetime import datetime, timezone
 from typing import Any
@@ -36,8 +37,10 @@ from ltm100.metrics.report import (
     write_server_metrics,
     write_summary_csv,
     write_summary_json,
+    write_timeseries_csv,
 )
 from ltm100.metrics.server_metrics import SnapshotCollector, finish
+from ltm100.metrics.timeseries import aggregate_timeseries
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +202,11 @@ async def _run_shard_async(args: argparse.Namespace) -> ShardResult:
                         exc_info=True,
                     )
     return ShardResult(
-        runner.recorder.raw(), runner.session_stats, runner.preingest_stats
+        runner.recorder.raw(),
+        runner.session_stats,
+        runner.preingest_stats,
+        runner.measurement_started_at,
+        runner.measurement_ended_at,
     )
 
 
@@ -260,6 +267,8 @@ def _run_metadata(
     started_at: datetime,
     ended_at: datetime,
     preingest_stats: dict[str, int | None] | None = None,
+    measurement_started_at: float | None = None,
+    measurement_ended_at: float | None = None,
 ) -> dict:
     """Describe the whole run, never an individual process shard."""
     meta = {
@@ -285,6 +294,18 @@ def _run_metadata(
         "started_at": started_at.isoformat(),
         "ended_at": ended_at.isoformat(),
     }
+    if measurement_started_at is not None and measurement_ended_at is not None:
+        meta.update(
+            measurement_started_at=datetime.fromtimestamp(
+                measurement_started_at, timezone.utc
+            ).isoformat(),
+            measurement_ended_at=datetime.fromtimestamp(
+                measurement_ended_at, timezone.utc
+            ).isoformat(),
+        )
+    time_series_interval = getattr(args, "time_series_interval", None)
+    if time_series_interval is not None:
+        meta["time_series_interval"] = time_series_interval
 
     if args.model == "open":
         meta.update(
@@ -363,6 +384,12 @@ def _probe_server_metrics(cfg) -> dict:
 def _run(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     run_cfg = _build_run_config(args)
+    time_series_interval = getattr(args, "time_series_interval", None)
+    if time_series_interval is not None:
+        if not math.isfinite(time_series_interval) or time_series_interval <= 0:
+            raise ValueError("--time-series-interval must be a finite number > 0")
+        if not args.output:
+            raise ValueError("--time-series-interval requires --output")
     # Validate scenario-specific files and options before probing or mutating
     # the backend. Each shard rebuilds the scenario it will actually run.
     _build_scenario(args)
@@ -443,7 +470,9 @@ def _run(args: argparse.Namespace) -> int:
     try:
         started_at = datetime.now(timezone.utc)
         synchronize_workers = run_cfg.procs > 1 and (
-            collector is not None or run_cfg.warmup > 0
+            collector is not None
+            or run_cfg.warmup > 0
+            or time_series_interval is not None
         )
         if synchronize_workers:
             shard_result = run_shards(
@@ -474,10 +503,16 @@ def _run(args: argparse.Namespace) -> int:
         raw = shard_result.results
         session_stats = shard_result.sessions
         preingest_stats = shard_result.preingest
+        measurement_started_at = shard_result.measurement_started_at
+        measurement_ended_at = shard_result.measurement_ended_at
     else:  # compatibility with integrations that wrap run_shards
         raw = shard_result
         session_stats = None
         preingest_stats = None
+        measurement_started_at = min(
+            (result.started_at for result in raw), default=None
+        )
+        measurement_ended_at = max((result.ended_at for result in raw), default=None)
     summary = aggregate(raw)
     if args.model == "open" and session_stats is not None:
         summary["sessions"] = session_stats.as_dict()
@@ -492,6 +527,8 @@ def _run(args: argparse.Namespace) -> int:
         preingest_stats=(
             preingest_stats.as_dict() if preingest_stats is not None else None
         ),
+        measurement_started_at=measurement_started_at,
+        measurement_ended_at=measurement_ended_at,
     )
 
     # The section's `raw` block is the full two-snapshot scrape: too big for
@@ -515,6 +552,18 @@ def _run(args: argparse.Namespace) -> int:
             write_server_metrics(server_metrics, out)
         if args.raw:
             write_raw_ndjson(raw, f"{out}/raw.ndjson")
+        if time_series_interval is not None:
+            if measurement_started_at is None or measurement_ended_at is None:
+                raise RuntimeError(
+                    "measured window is unavailable for time-series output"
+                )
+            rows = aggregate_timeseries(
+                raw,
+                interval_seconds=time_series_interval,
+                measurement_started_at=measurement_started_at,
+                measurement_ended_at=measurement_ended_at,
+            )
+            write_timeseries_csv(rows, f"{out}/timeseries.csv")
         if not getattr(args, "_quiet", False):
             print(f"reports written to {out}/")
 
@@ -709,6 +758,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--output", default=None, help="output dir for reports")
     run.add_argument("--raw", action="store_true", help="also write raw.ndjson")
+    run.add_argument(
+        "--time-series-interval",
+        type=float,
+        default=None,
+        help="write timeseries.csv with client-observed E2E metrics aggregated "
+        "into fixed intervals of this many seconds",
+    )
     run.add_argument("--no-delete-on-exit", action="store_true", help="keep user state")
     run.set_defaults(func=_run)
 

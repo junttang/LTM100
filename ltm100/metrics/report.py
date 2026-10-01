@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -208,9 +209,54 @@ def write_raw_ndjson(results: list[OpResult], path: str | Path) -> None:
             f.write(json.dumps(row) + "\n")
 
 
+def write_timeseries_csv(rows: list[dict[str, Any]], path: str | Path) -> None:
+    """Write fixed-interval client-observed E2E metrics."""
+    fields = [
+        "bucket_index",
+        "elapsed_start_s",
+        "elapsed_end_s",
+        "interval_seconds",
+        "bucket_started_at",
+        "bucket_ended_at",
+        "op_type",
+        "started",
+        "completed",
+        "successful",
+        "errors",
+        "rejected",
+        "successful_ops_s",
+        "in_flight_end",
+        "latency_samples",
+        "latency_mean_ms",
+        "latency_p50_ms",
+        "latency_p95_ms",
+        "latency_p99_ms",
+        "latency_max_ms",
+        "n_items_mean",
+        "empty_rate",
+    ]
+
+    def value(field: str, raw: Any) -> Any:
+        if raw is None:
+            return ""
+        if field in {"bucket_started_at", "bucket_ended_at"}:
+            return datetime.fromtimestamp(raw, timezone.utc).isoformat()
+        if isinstance(raw, float):
+            return f"{raw:.6f}"
+        return raw
+
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: value(field, row.get(field)) for field in fields})
+
+
 __all__ = [
     "write_raw_ndjson",
     "write_server_metrics",
     "write_summary_csv",
     "write_summary_json",
+    "write_timeseries_csv",
 ]

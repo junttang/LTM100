@@ -46,6 +46,15 @@ def _preingest_stats_entry(args: dict, proc_index: int) -> ShardResult:
     return ShardResult([], SessionAdmissionStats(), stats)
 
 
+def _measurement_window_entry(args: dict, proc_index: int) -> ShardResult:
+    return ShardResult(
+        [],
+        SessionAdmissionStats(),
+        measurement_started_at=100.0 + proc_index,
+        measurement_ended_at=110.0 + proc_index,
+    )
+
+
 def test_parent_hooks_bracket_every_shards_measured_window():
     boundaries: dict[str, float] = {}
 
@@ -98,3 +107,11 @@ def test_preingest_stats_are_pooled_across_shards():
         "min_items_per_user": 10,
         "max_items_per_user": 20,
     }
+
+
+def test_measurement_window_spans_every_shard():
+    result = run_shards(_measurement_window_entry, {}, 2)
+
+    assert isinstance(result, ShardResult)
+    assert result.measurement_started_at == 100.0
+    assert result.measurement_ended_at == 111.0

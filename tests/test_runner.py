@@ -89,6 +89,23 @@ async def test_add_load_emits_adds_only():
 
 
 @pytest.mark.asyncio
+async def test_runner_records_exact_measured_window_around_results():
+    runner = LoadRunner(
+        client=FakeBackend(),
+        dataset=FakeDataset(n_memories=2),
+        scenario=AddLoad(),
+        config=RunConfig(users=1, ops=2),
+    )
+
+    results = await runner.run()
+
+    assert runner.measurement_started_at is not None
+    assert runner.measurement_ended_at is not None
+    assert runner.measurement_started_at <= min(result.started_at for result in results)
+    assert runner.measurement_ended_at >= max(result.ended_at for result in results)
+
+
+@pytest.mark.asyncio
 async def test_search_load_emits_searches_only():
     ds = FakeDataset(n_memories=100)
     backend = FakeBackend()
