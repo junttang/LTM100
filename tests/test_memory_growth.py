@@ -202,6 +202,43 @@ def test_memory_growth_sweep_reuses_run_path_and_aggregates(tmp_path, monkeypatc
     assert manifest["points"][1]["aggregate"]["qps"]["median"] == 20.0
 
 
+def test_memory_growth_propagates_server_metrics_interval(tmp_path, monkeypatch):
+    args = _sweep_args(
+        tmp_path,
+        "--repetitions",
+        "1",
+        "--server-metrics",
+        "--server-metrics-interval",
+        "5",
+    )
+    calls = []
+
+    def fake_run(run_args):
+        calls.append(run_args)
+        output = Path(run_args.output)
+        output.mkdir(parents=True)
+        (output / "summary.json").write_text(
+            json.dumps(_payload(run_args.preingest_items_per_user))
+        )
+        return 0
+
+    monkeypatch.setattr("ltm100.cli._run", fake_run)
+
+    assert _run_memory_growth(args) == 0
+    assert {call.server_metrics_interval for call in calls} == {5.0}
+    manifest = json.loads((Path(args.output) / "manifest.json").read_text())
+    assert manifest["config"]["server_metrics_interval"] == 5.0
+
+
+def test_memory_growth_interval_requires_server_metrics(tmp_path):
+    args = _sweep_args(tmp_path, "--server-metrics-interval", "5")
+
+    with pytest.raises(ValueError, match="requires --server-metrics"):
+        _run_memory_growth(args)
+
+    assert not Path(args.output).exists()
+
+
 def test_memory_growth_sweep_records_failure_and_continues(tmp_path, monkeypatch):
     args = _sweep_args(tmp_path, "--repetitions", "1")
     completed = []

@@ -359,7 +359,9 @@ a slow search to a server phase (embedding call vs. vector query vs. reranking)
 the server has to say so itself. A backend that exposes its own Prometheus
 metrics endpoint declares it with the class attribute
 `supports_server_metrics`, and the CLI scrapes it — two snapshots bracketing
-the run, and every histogram reported as the difference.
+the run, and every histogram reported as the difference. With
+`--server-metrics-interval`, intermediate snapshots additionally expose the
+same breakdown as a time series.
 
 - **Declared, not guessed.** `--server-metrics` on a backend without the
   attribute warns and runs without the section; on a backend that declares it
@@ -384,13 +386,22 @@ the run, and every histogram reported as the difference.
   (embedder, vector store, segment store, ...) used for cause attribution,
   goes to `server_metrics_raw.json`; the table goes to
   `summary.json["server_metrics"]` and `server_metrics.csv`.
+- **Periodic breakdowns are adjacent deltas.** The sampler uses fixed
+  monotonic deadlines on a dedicated thread, preserving the load generator's
+  event loop. `server_metrics_timeseries.csv` diffs each snapshot only against
+  its immediate predecessor and keeps the final partial interval. A failed
+  scrape invalidates intervals touching that boundary; it is never bridged to
+  a later snapshot and mislabeled as one interval. Slow scrapes skip missed
+  deadlines instead of sending catch-up requests.
 - **The row table belongs to the current backend.** The phase/http series
   listed above are MemMachine's; the parser, the delta arithmetic, and the
   report writers behind it know nothing of that, and a second backend that
   implements the metrics query contributes its own row table in place of
   this one.
-- **Observation never breaks observation**: a snapshot failure mid-run yields
-  `status: "failed"` in the section and a normal benchmark report.
+- **Observation never breaks observation**: a boundary snapshot failure yields
+  `status: "failed"` for the aggregate; a periodic failure yields a partial
+  time series with the affected intervals marked failed. Both still produce a
+  normal benchmark report.
 
 ## 8. Run Lifecycle
 
@@ -414,8 +425,8 @@ the run, and every histogram reported as the difference.
    also exposed as a standalone cleanup command.
 9. **Aggregate & report** — summary JSON/CSV + optional fixed-interval E2E
    time series + optional raw NDJSON + optional server-metrics section (§7.3),
-   whose snapshots are taken inside step 6's boundaries when
-   `--server-metrics` is on.
+   whose aggregate and periodic snapshots are taken inside step 6's
+   boundaries when `--server-metrics` is on.
 
 Termination: count-based (total K ops) **or** time-based (T seconds). Ramp-up
 is optional; warm-up time is excluded from steady-state metrics.

@@ -89,6 +89,51 @@ def write_server_metrics(server_metrics: dict[str, Any], out_dir: str | Path) ->
             json.dump(raw, f, indent=2)
 
 
+def write_server_metrics_timeseries(
+    rows: list[dict[str, Any]], path: str | Path
+) -> None:
+    """Write fixed-interval server-side latency breakdowns."""
+    fields = [
+        "bucket_index",
+        "elapsed_start_s",
+        "elapsed_end_s",
+        "interval_seconds",
+        "bucket_started_at",
+        "bucket_ended_at",
+        "series",
+        "status",
+        "delta_count",
+        "delta_sum_s",
+        "mean_s",
+        "p50_s",
+        "p90_s",
+        "p99_s",
+        "note",
+    ]
+
+    def value(field: str, raw: Any) -> Any:
+        if raw is None:
+            return ""
+        if field in {"bucket_started_at", "bucket_ended_at"}:
+            return datetime.fromtimestamp(raw, timezone.utc).isoformat()
+        if isinstance(raw, float):
+            return f"{raw:.6f}"
+        return raw
+
+    aliases = {"p50_s": "p50", "p90_s": "p90", "p99_s": "p99"}
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    field: value(field, row.get(aliases.get(field, field)))
+                    for field in fields
+                }
+            )
+
+
 def write_summary_csv(summary: dict[str, Any], path: str | Path) -> None:
     """Write one row per op type with the key metrics, plus an overall row.
 
@@ -256,6 +301,7 @@ def write_timeseries_csv(rows: list[dict[str, Any]], path: str | Path) -> None:
 __all__ = [
     "write_raw_ndjson",
     "write_server_metrics",
+    "write_server_metrics_timeseries",
     "write_summary_csv",
     "write_summary_json",
     "write_timeseries_csv",
