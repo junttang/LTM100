@@ -242,6 +242,8 @@ def _run_args(
         chat_profile=None,
         answer_time=0.0,
         user_gap=0.0,
+        answer_time_variation=None,
+        user_gap_variation=None,
         expand=args.expand,
         filter=args.filter,
         procs=args.procs,

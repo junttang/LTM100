@@ -21,6 +21,9 @@ configurations fail validation if paired with `chat-replay`.
 to standard, power, and intensive groups. `concurrent_sessions` controls fixed
 closed-model lanes; `max_sessions_per_user` caps active open-model sessions
 and is required for every group when the profile is used with the open model.
+The bundled timing variation ratios keep `answer_time` and `user_gap` inside
+explicit bounded Uniform ranges instead of the default unbounded Exponential
+distribution.
 
 For `search-load`, use `--preingest` so the measured search begins with a
 populated corpus. The same is recommended for `mixed` when searches should be

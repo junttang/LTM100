@@ -343,9 +343,12 @@ class ChatReplay:
         the user is reading/typing while nothing happens at the LTM. Models
         user think/typing time before the next utterance.
 
-    Both default to 0, which reproduces the original back-to-back loop. They
-    apply uniformly unless a chat workload profile supplies group-specific
-    values.
+    Both default to 0, which reproduces the original back-to-back loop. An
+    optional `answer_time_variation` or `user_gap_variation` replaces the
+    corresponding unbounded Exponential draw with a bounded Uniform draw at
+    `mean * (1 +/- variation)`. A variation of 0 makes the delay fixed; 1
+    allows the full 0-to-2x range. They apply uniformly unless a chat workload
+    profile supplies group-specific values.
     `answer_time` only takes effect when there is a following assistant turn;
     `user_gap` only between turns (never before the very first turn of a
     replay pass, so each pass starts cleanly).
@@ -363,6 +366,8 @@ class ChatReplay:
         search_every: int = 1,
         answer_time: float = 0.0,
         user_gap: float = 0.0,
+        answer_time_variation: float | None = None,
+        user_gap_variation: float | None = None,
         top_k: int = 20,
         expand_context: int = 0,
         filter: str = "",
@@ -374,12 +379,16 @@ class ChatReplay:
             raise ValueError("answer_time must be >= 0")
         if user_gap < 0:
             raise ValueError("user_gap must be >= 0")
+        self._validate_variation("answer_time_variation", answer_time_variation)
+        self._validate_variation("user_gap_variation", user_gap_variation)
         if top_k <= 0:
             raise ValueError("top_k must be > 0")
         if expand_context < 0:
             raise ValueError("expand_context must be >= 0")
         self.answer_time = answer_time
         self.user_gap = user_gap
+        self.answer_time_variation = answer_time_variation
+        self.user_gap_variation = user_gap_variation
         self.top_k = top_k
         self.expand_context = expand_context
         self.filter = filter
@@ -547,10 +556,16 @@ class ChatReplay:
                 )
             if turn_ops:
                 if is_user and turn_index > 0 and settings.user_gap > 0:
-                    extra = rng.expovariate(1.0 / settings.user_gap)
+                    extra = self._timing_delay(
+                        rng, settings.user_gap, settings.user_gap_variation
+                    )
                     turn_ops[0] = replace(turn_ops[0], delay=turn_ops[0].delay + extra)
                 if is_assistant and previous_user_turn and settings.answer_time > 0:
-                    extra = rng.expovariate(1.0 / settings.answer_time)
+                    extra = self._timing_delay(
+                        rng,
+                        settings.answer_time,
+                        settings.answer_time_variation,
+                    )
                     turn_ops[0] = replace(turn_ops[0], delay=turn_ops[0].delay + extra)
                 yield from turn_ops
             previous_user_turn = is_user and bool(turn_ops)
@@ -571,7 +586,22 @@ class ChatReplay:
             answer_time=self.answer_time,
             user_gap=self.user_gap,
             top_k=self.top_k,
+            answer_time_variation=self.answer_time_variation,
+            user_gap_variation=self.user_gap_variation,
         )
+
+    @staticmethod
+    def _validate_variation(name: str, variation: float | None) -> None:
+        if variation is not None and not 0.0 <= variation <= 1.0:
+            raise ValueError(f"{name} must be between 0 and 1")
+
+    @staticmethod
+    def _timing_delay(
+        rng: random.Random, mean: float, variation: float | None
+    ) -> float:
+        if variation is None:
+            return rng.expovariate(1.0 / mean)
+        return rng.uniform(mean * (1.0 - variation), mean * (1.0 + variation))
 
 
 SCENARIOS: dict[str, type] = {
