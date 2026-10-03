@@ -130,6 +130,23 @@ async def test_expand_context_is_rejected(mem0_server):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["user_id", "metadata.user_id", " metadata.user_id "])
+async def test_filter_cannot_override_user_isolation(mem0_server, key):
+    url, app = mem0_server
+    async with Mem0Client(url) as client:
+        await client.add("u0", [MemoryItem("private-zero")])
+        await client.add("u1", [MemoryItem("private-one")])
+        with pytest.raises(ValueError, match="reserved"):
+            await client.search(
+                "u0", QueryItem("q", filter=f"{key}={client._user_id('u1')}")
+            )
+        assert not any(kind == "search" for kind, _, _ in app[REQUESTS])
+        assert [r.content for r in await client.search("u0", QueryItem("q"))] == [
+            "private-zero"
+        ]
+
+
+@pytest.mark.asyncio
 async def test_teardown_deletes_only_requested_user(mem0_server):
     url, _ = mem0_server
     async with Mem0Client(url) as client:
