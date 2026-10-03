@@ -1,0 +1,29 @@
+# LTM100 example: synthetic data + Supermemory direct-memory REST API.
+#
+# Start the official local server (default port 6767) and export its API key:
+#   export SUPERMEMORY_API_KEY=<your-local-api-key>
+#   ltm100 run --config examples/supermemory.yaml \
+#       --scenario search-load --users 20 --duration 30 --seed 0 \
+#       --top-k 20 --preingest --output out/supermemory
+#
+# Synthetic supports add-load, search-load, and mixed, not chat-replay.
+# For chat-replay, replace the dataset with the LongMemEval section from
+# memmachine.yaml; scenario/session/timing controls do not change.
+# See docs/supermemory.md for authentication, cleanup, and backend limits.
+
+dataset:
+  name: synthetic
+  memories_per_user: 100
+  content_chars: 200
+
+backend:
+  name: supermemory
+  base_url: http://localhost:6767  # or https://api.supermemory.ai
+  api_key_env: SUPERMEMORY_API_KEY
+  # Use a fresh prefix for each independent run. Cleanup deletes these tags.
+  user_prefix: ltm100
+  timeout: 60.0
+  retries: 0
+  add_batch_size: 1  # 1-100; sequential batches, one ID per input
+  threshold: 0.0  # explicit: no similarity cutoff (server default is 0.6)
+  rerank: false

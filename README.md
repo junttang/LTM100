@@ -97,9 +97,11 @@ Backends:
 - **MemMachine REST**
 - **MemMachine MCP** with REST lifecycle management
 - **Mem0 OSS REST**
+- **Supermemory REST** with direct memory creation
 
 Backend-specific options and unsupported feature combinations are documented
 in the [running guide](docs/running.md).
+See the [Supermemory guide](docs/supermemory.md) for its API scope and limitations.
 
 ## Reports
 

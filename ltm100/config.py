@@ -26,6 +26,7 @@ import yaml
 
 from ltm100.adapters.backends.mem0 import Mem0Client
 from ltm100.adapters.backends.memmachine import MemMachineClient
+from ltm100.adapters.backends.supermemory import SupermemoryClient
 from ltm100.adapters.datasets.longmemeval import LongMemEvalAdapter
 from ltm100.adapters.datasets.synthetic import SyntheticAdapter
 from ltm100.common import DatasetAdapter, LTMClient
@@ -76,6 +77,7 @@ _DATASET_REGISTRY: dict[str, type] = {
 _BACKEND_REGISTRY: dict[str, type] = {
     MemMachineClient.name: MemMachineClient,
     Mem0Client.name: Mem0Client,
+    SupermemoryClient.name: SupermemoryClient,
 }
 
 

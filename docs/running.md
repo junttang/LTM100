@@ -303,6 +303,20 @@ memory without LLM fact extraction, preserving LTM100's item accounting. Set
 `infer: true` to include Mem0's extraction pipeline. Mem0 supports `--filter`
 but not `--expand`; dialogue item roles are forwarded in each message.
 
+### Supermemory REST
+
+[`examples/supermemory.yaml`](../examples/supermemory.yaml) uses direct
+`/v4/memories` creation and `/v4/search` with one container tag per user.
+It supports exact-match metadata filters and `top_k` values 1–100. Item role,
+producer, and timestamp are retained as provenance metadata. Authentication is
+read from an environment variable, not stored in the YAML.
+
+Context expansion is disabled with a warning for this backend, and server-side
+metrics are reported as unsupported; client-observed reports remain available.
+This path does not benchmark asynchronous document extraction. See the
+[Supermemory guide](supermemory.md) for measurement semantics, namespace/cleanup
+safety, configuration, and official-server tests.
+
 ## Reports
 
 With `--output DIR`, LTM100 writes:
