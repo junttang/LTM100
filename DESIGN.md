@@ -39,7 +39,7 @@ configuration is simple, and defaults are sensible.
 
 **Goals**
 - Pluggable datasets (LongMemEval first; BEAM, LoCoMo, others later).
-- Pluggable LTM backends (MemMachine and Mem0; others later).
+- Pluggable LTM backends (MemMachine, Mem0, and Supermemory).
 - Pluggable transport (REST first; MCP later) under a unified backend adapter.
 - Multiple load scenarios: pure load tests and realistic per-user patterns.
 - Reproducible (seeded), with variance runs available.
@@ -174,7 +174,7 @@ class LTMClient(Protocol):
 
 - Per-user scoping is the adapter's responsibility: it maps `UserId` to the
   backend's tenant key (MemMachine: `org_id`/`project_id` → `session_key`;
-  Mem0: namespaced `user_id`).
+  Mem0: namespaced `user_id`; Supermemory: namespaced hashed `containerTag`).
 - The adapter is async. Mem0 uses its self-hosted REST API, so the load path
   does not run a synchronous SDK inside the client process.
 - `setup`/`teardown` are out-of-measurement phases.
@@ -186,6 +186,9 @@ class LTMClient(Protocol):
   (e.g. the MCP transport has neither `expand_context` nor `filter`) must
   **raise** rather than silently run a baseline search under the label of a
   filtered/expanded one — otherwise the error rate would lie.
+  Supermemory explicitly disables unsupported context expansion with a warning,
+  as documented in its [backend guide](docs/supermemory.md); no neighboring
+  episodes are claimed. Existing adapters retain their current error behavior.
 
 ### 4.3 Transport (under a backend adapter)
 

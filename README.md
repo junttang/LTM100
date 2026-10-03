@@ -97,9 +97,12 @@ Backends:
 - **MemMachine REST**
 - **MemMachine MCP** with REST lifecycle management
 - **Mem0 OSS REST**
+- **Supermemory REST** with direct memory creation
 
-Backend-specific options and unsupported feature combinations are documented
-in the [running guide](docs/running.md).
+See the [backend support matrix](docs/backend-support.md) for workload, option,
+and observability support across adapters, and the
+[running guide](docs/running.md) for configuration details.
+See the [Supermemory guide](docs/supermemory.md) for its API scope and limitations.
 
 ## Reports
 
@@ -118,6 +121,8 @@ percentiles. See [Reports](docs/running.md#reports) for the output contract.
 
 - [Running guide](docs/running.md) — configuration, commands, flags, reports,
   and cleanup.
+- [Backend support](docs/backend-support.md) — shared features, adapter limits,
+  and comparison semantics.
 - [Scenario guide](docs/scenarios.md) — per-scenario data flow and behavior.
 - [Load models](docs/load-models.md) — closed/open scheduling and congestion.
 - [Example configurations](examples/README.md) — YAML selection guide.

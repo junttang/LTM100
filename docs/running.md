@@ -271,6 +271,9 @@ Run `ltm100 run --help` for the complete and authoritative option list.
 
 ## Backend notes
 
+See the [backend support matrix](backend-support.md) for a concise comparison
+of workloads, options, observability, and measurement semantics.
+
 ### MemMachine REST
 
 [`examples/memmachine.yaml`](../examples/memmachine.yaml) maps each virtual
@@ -302,6 +305,22 @@ namespaced Mem0 `user_id`. Its default `infer: false` stores each input as one
 memory without LLM fact extraction, preserving LTM100's item accounting. Set
 `infer: true` to include Mem0's extraction pipeline. Mem0 supports `--filter`
 but not `--expand`; dialogue item roles are forwarded in each message.
+The `user_id` filter key (including `metadata.user_id`) is reserved for tenant
+scope and rejected rather than allowing a filter to override user isolation.
+
+### Supermemory REST
+
+[`examples/supermemory.yaml`](../examples/supermemory.yaml) uses direct
+`/v4/memories` creation and `/v4/search` with one container tag per user.
+It supports exact-match metadata filters and `top_k` values 1–100. Item role,
+producer, and timestamp are retained as provenance metadata. Authentication is
+read from an environment variable, not stored in the YAML.
+
+Context expansion is disabled with a warning for this backend, and server-side
+metrics are reported as unsupported; client-observed reports remain available.
+This path does not benchmark asynchronous document extraction. See the
+[Supermemory guide](supermemory.md) for measurement semantics, namespace/cleanup
+safety, configuration, and official-server tests.
 
 ## Reports
 

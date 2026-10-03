@@ -9,6 +9,7 @@ backend. The dataset determines whether `chat-replay` is available.
 | `synthetic.yaml` | Synthetic | MemMachine REST | `add-load`, `search-load`, `mixed` |
 | `memmachine-mcp.yaml` | LongMemEval | MemMachine MCP | `chat-replay` |
 | `mem0.yaml` | Synthetic | Mem0 REST | `add-load`, `search-load`, `mixed` |
+| `supermemory.yaml` | Synthetic | Supermemory REST (direct memories) | `add-load`, `search-load`, `mixed` |
 | `shared-project.yaml` | Synthetic | MemMachine REST | Isolation-scope `add-load`, `search-load`, or `mixed` |
 | `chat-profile.yaml` | Chat workload profile | Used with a LongMemEval config | Group-specific `chat-replay` load |
 

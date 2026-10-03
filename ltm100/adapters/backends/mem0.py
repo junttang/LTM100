@@ -85,6 +85,10 @@ class Mem0Client:
         filters: dict[str, Any] = {"user_id": self._user_id(user)}
         if query.filter:
             key, value = _parse_filter(query.filter)
+            if key == "user_id":
+                raise ValueError(
+                    "Mem0 filter key 'user_id' is reserved for per-user isolation"
+                )
             filters[key] = value
         response = await self._transport.request(
             "POST",
