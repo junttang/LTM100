@@ -62,6 +62,29 @@ Sessions *arrive* over time, run a bounded slice, then leave:
 Open models real traffic: visitors arriving independently (web site,
 messaging app) and each doing a short burst of work.
 
+## Termination and request draining
+
+`--duration` bounds when the runner may dispatch new backend operations. Delays,
+ramp-up, and waits for a global concurrency slot stop at the phase deadline.
+An operation that expires before dispatch is omitted from results; it is not
+an error or a `queue_full` rejection. Open-model session admissions also stop
+at the deadline.
+
+Requests already dispatched are allowed to finish and their results are
+recorded. The measured window, final server-metrics snapshot, and time-series
+reports include this drain, so a run's completion time can exceed its duration.
+The boundary is client dispatch, not server arrival or completion; transport
+retries remain part of the already-dispatched operation.
+
+A closed run with only `--ops N` executes exactly N operations, provided the
+scenario supplies enough operations. Count exhaustion never discards another
+lane's reserved work. If both `--ops` and `--duration` are set, duration also
+limits dispatch and fewer than N operations may execute. Open runs remain
+duration-based, with `--session-ops` limiting each session.
+
+Warm-up applies the same deadline and drain rules, then resets termination
+state before the separate measured duration or operation budget begins.
+
 ## Congestion policy (the open model's key output)
 
 Under closed, concurrency is fixed at N so nothing is ever rejected. Under
