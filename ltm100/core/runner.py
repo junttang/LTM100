@@ -273,8 +273,6 @@ class LoadRunner:
                         )
                     )
                 )
-        if deadline is not None:
-            asyncio.create_task(self._timer(deadline, self._stop))
         await asyncio.gather(*tasks, return_exceptions=True)
 
     def _session_ids(self, user: UserId) -> list[int | None]:
@@ -297,12 +295,8 @@ class LoadRunner:
         next_user = 0
         active_sessions: dict[UserId, set[int]] = {user: set() for user in users}
 
-        # Always run the timer to honor the deadline even if all sessions are
-        # short; the arrival generator stops at the deadline.
-        asyncio.create_task(self._timer(deadline, self._stop))
-
         t = self._start_time
-        while not self._should_stop():
+        while not self._should_stop() and not self._deadline_reached(deadline):
             # Inter-arrival ~ Exponential(rate).
             gap = rng.expovariate(rate)
             t += gap
@@ -310,14 +304,14 @@ class LoadRunner:
             if t > deadline:
                 break
             wait = max(0.0, t - now)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            if self._should_stop():
+            if not await self._wait_delay(wait, deadline) or self._should_stop():
                 break
             user = users[next_user % len(users)]
             next_user += 1
             group_for = getattr(self.scenario, "session_group", None)
             group = group_for(user) if group_for is not None else ""
+            if self._deadline_reached(deadline):
+                break
             if self._record_results:
                 self.session_stats.record("offered", group)
             admission = self._admit_open_session(user, active_sessions)
@@ -386,18 +380,20 @@ class LoadRunner:
         plan = self.scenario.plan(user, self.dataset, rng_state)
         try:
             for _ in range(n_ops):
-                if self._should_stop() or time.monotonic() >= deadline:
+                if self._should_stop() or self._deadline_reached(deadline):
                     return
                 try:
                     op = next(plan)
                 except StopIteration:
                     return
-                if op.delay > 0:
-                    await asyncio.sleep(min(op.delay, self._remaining_until(deadline)))
-                    if self._should_stop() or time.monotonic() >= deadline:
-                        return
-                acquired = await self._acquire_slot_bounded()
+                if not await self._wait_delay(op.delay, deadline):
+                    return
+                acquired = await self._acquire_slot_bounded(deadline)
+                if acquired is None:
+                    return
                 if not acquired:
+                    if self._deadline_reached(deadline):
+                        return
                     await self._record_rejected(op, user)
                     continue
                 try:
@@ -408,11 +404,14 @@ class LoadRunner:
             if session_id is not None:
                 active_sessions[user].remove(session_id)
 
-    async def _acquire_slot_bounded(self) -> bool:
+    async def _acquire_slot_bounded(self, deadline: float | None = None) -> bool | None:
         """Try to take a global concurrency slot, queuing up to queue_bound.
 
-        Returns True if a slot was acquired, False if rejected (queue full).
-        When there is no global cap, always succeeds."""
+        Returns True if acquired, False for a full queue, or None if expired.
+        Expiration is not a congestion rejection and must not enter metrics.
+        """
+        if self._deadline_reached(deadline):
+            return None
         if self._global_sem is None:
             return True
         # Reserve admission before waiting on the semaphore. The counter covers
@@ -421,18 +420,23 @@ class LoadRunner:
         # check and reservation one atomic decision across arriving sessions.
         capacity = self.config.global_concurrency + self.config.queue_bound
         async with self._admission_lock:
+            if self._deadline_reached(deadline):
+                return None
             if self._admitted >= capacity:
                 return False
             self._admitted += 1
 
         try:
-            await self._global_sem.acquire()
-            return True
+            acquired = await self._acquire_global_slot(deadline)
         except BaseException:
             # A cancelled waiter must return its admission reservation or the
             # queue would appear permanently full.
             self._admitted -= 1
             raise
+        if not acquired:
+            self._admitted -= 1
+            return None
+        return True
 
     async def _record_rejected(self, op: Op, user: UserId) -> None:
         now = time.time()
@@ -528,19 +532,54 @@ class LoadRunner:
         step = self.config.rampup / total
         return step * index
 
-    async def _timer(self, deadline: float, stop: asyncio.Event) -> None:
-        while time.monotonic() < deadline:
-            await asyncio.sleep(0.05)
-        stop.set()
-
     def _should_stop(self) -> bool:
         return self._stop.is_set()
+
+    def _deadline_reached(self, deadline: float | None) -> bool:
+        return deadline is not None and time.monotonic() >= deadline
+
+    async def _wait_delay(self, delay: float, deadline: float | None) -> bool:
+        """Wait only within the dispatch window; count-only delays are unbounded."""
+        if self._deadline_reached(deadline):
+            return False
+        if delay > 0:
+            await asyncio.sleep(
+                delay
+                if deadline is None
+                else min(delay, self._remaining_until(deadline))
+            )
+        return not self._deadline_reached(deadline)
+
+    async def _acquire_global_slot(self, deadline: float | None) -> bool:
+        """Acquire before the deadline without cancelling an executing request."""
+        if self._deadline_reached(deadline):
+            return False
+        sem = self._global_sem
+        if sem is None:
+            return True
+        try:
+            if deadline is not None and sem.locked():
+                await asyncio.wait_for(
+                    sem.acquire(), timeout=self._remaining_until(deadline)
+                )
+            else:
+                # Avoid task creation on the uncontended workload hot path.
+                await sem.acquire()
+        except asyncio.TimeoutError:
+            return False
+        # Acquisition may resume after the timeout boundary. Return the permit
+        # before reporting expiry; callers must not release it a second time.
+        if self._deadline_reached(deadline):
+            sem.release()
+            return False
+        return True
 
     async def _reserve_op(self) -> bool:
         """Reserve budget for one op before emitting it (count-based).
 
-        A successful reservation is a promise to run the op, so count-based
-        termination records exactly `ops` results."""
+        With no duration limit, a reservation promises to run the op, so pure
+        count-based termination records exactly `ops` results. A duration cap
+        can expire a reserved but not yet dispatched operation."""
         if not self._record_results or self.config.ops <= 0:
             return True
         async with self._ops_lock:
@@ -557,8 +596,8 @@ class LoadRunner:
         *,
         session_id: int | None = None,
     ) -> None:
-        if start_delay > 0:
-            await asyncio.sleep(start_delay)
+        if not await self._wait_delay(start_delay, deadline):
+            return
 
         rng_state = {"seed": self.config.seed, "user": user}
         if session_id is not None:
@@ -568,37 +607,27 @@ class LoadRunner:
         for op in plan:
             if self._should_stop():
                 return
-            if deadline is not None and time.monotonic() >= deadline:
+            if self._deadline_reached(deadline):
                 return
             if not await self._reserve_op():
                 self._stop.set()
                 return
-            # A successful reservation is a promise to run this op, so we
-            # don't check _should_stop() here: count-based termination is
-            # exact (exactly `ops` results are recorded).
-            if op.delay > 0:
-                await asyncio.sleep(min(op.delay, self._remaining_until(deadline)))
-
-            async with self._maybe_global_slot():
+            # A count stop cannot discard another lane's reserved operation.
+            # Only an explicit duration deadline can expire pending dispatch.
+            if not await self._wait_delay(op.delay, deadline):
+                return
+            if not await self._acquire_global_slot(deadline):
+                return
+            try:
                 await self._execute(user, op)
+            finally:
+                if self._global_sem is not None:
+                    self._global_sem.release()
 
     def _remaining_until(self, deadline: float | None) -> float:
-        if deadline is None:
-            return 1e9  # effectively unbounded
-        return max(deadline - time.monotonic(), 0.0)
-
-    def _maybe_global_slot(self):
-        if self._global_sem is None:
-
-            class _Null:
-                async def __aenter__(self_inner):
-                    return self_inner
-
-                async def __aexit__(self_inner, *a):
-                    return False
-
-            return _Null()
-        return self._global_sem
+        return (
+            float("inf") if deadline is None else max(deadline - time.monotonic(), 0.0)
+        )
 
     async def _execute(self, user: UserId, op: Op) -> None:
         started = time.time()

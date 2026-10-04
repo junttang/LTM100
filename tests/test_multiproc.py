@@ -2,11 +2,72 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
+
+import pytest
 
 from ltm100.core.multiproc import ShardResult, run_shards
 from ltm100.core.op import OpResult, OpType
 from ltm100.core.runner import PreingestStats, SessionAdmissionStats
+
+
+def _deadline_runner_entry(args: dict, proc_index: int) -> ShardResult:
+    from test_duration_boundary import Backend, Dataset, Scenario
+
+    from ltm100.core.config import RunConfig
+    from ltm100.core.runner import LoadRunner
+
+    class SlowBackend(Backend):
+        async def add(self, user, items):
+            self.starts.append(time.monotonic())
+            await asyncio.sleep(0.08)
+            return ["id"]
+
+    async def run():
+        backend = SlowBackend()
+        runner = LoadRunner(
+            client=backend,
+            dataset=Dataset(),
+            scenario=Scenario(),
+            config=RunConfig(
+                users=4,
+                procs=2,
+                proc_index=proc_index,
+                duration=0.03,
+                warmup=0.02,
+                global_concurrency=1,
+                queue_bound=10,
+                model=args["model"],
+                arrival_rate=1000,
+                session_ops=2,
+            ),
+        )
+        results = await runner.run()
+        deadline = runner._start_time + runner.config.duration
+        assert all(start < deadline for start in backend.starts)
+        assert runner._admitted == 0
+        assert runner._global_sem._value == 1
+        assert sum(result.status == "ok" for result in results) == 1
+        assert runner.measurement_ended_at >= max(result.ended_at for result in results)
+        return ShardResult(
+            results,
+            runner.session_stats,
+            measurement_started_at=runner.measurement_started_at,
+            measurement_ended_at=runner.measurement_ended_at,
+        )
+
+    return asyncio.run(run())
+
+
+@pytest.mark.parametrize("model", ["closed", "open"])
+def test_duration_boundaries_hold_in_spawned_runners(model):
+    pooled = run_shards(_deadline_runner_entry, {"model": model}, 2)
+    assert isinstance(pooled, ShardResult)
+    assert sum(result.status == "ok" for result in pooled.results) == 2
+    assert all(
+        result.ended_at <= pooled.measurement_ended_at for result in pooled.results
+    )
 
 
 def _synchronized_entry(args: dict, proc_index: int) -> list[OpResult]:

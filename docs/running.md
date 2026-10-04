@@ -226,7 +226,9 @@ ltm100 run --config examples/memmachine.yaml \
 ## Common flags
 
 - `--duration SECONDS` or `--ops N`: measured termination condition; one is
-  required.
+  required. Duration stops new dispatch, then drains in-flight requests. A
+  closed count-only run executes exactly N operations; setting duration as
+  well can stop it earlier. See [termination rules](./load-models.md#termination-and-request-draining).
 - `--warmup SECONDS`: run the workload before measurement without consuming
   the measured duration/op budget or recording its requests.
 - `--users N`: virtual-user or tenant pool size.
