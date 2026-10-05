@@ -232,7 +232,9 @@ ltm100 run --config examples/memmachine.yaml \
 - `--warmup SECONDS`: run the workload before measurement without consuming
   the measured duration/op budget or recording its requests.
 - `--users N`: virtual-user or tenant pool size.
-- `--seed N`: reproducible load-shape seed.
+- `--seed N`: reproducible load-shape seed; also selects the synthetic corpus
+  and its content-derived queries. Keep it fixed across comparable runs and
+  memory-growth points. Seed `0` preserves the original synthetic content.
 - `--model closed|open`: scheduling model.
 - `--global-concurrency N`: maximum total in-flight operations (`0` = no cap).
 - `--arrival-rate F`, `--session-ops N`, `--queue-bound N`: open-model controls.

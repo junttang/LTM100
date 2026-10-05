@@ -5,7 +5,7 @@ without any external dataset download. Useful for smoke runs, regression, and
 comparing backends on identical synthetic load.
 
 Each virtual user gets `memories_per_user` memory items (content is
-deterministic per user+index). Search queries are content-derived by the
+deterministic per run seed+user+index). Search queries are content-derived by the
 scenarios from these memory items, so no separate query stream is exposed.
 
 It is a real DatasetAdapter (registered as "synthetic"), not a test fixture.
@@ -13,6 +13,7 @@ It is a real DatasetAdapter (registered as "synthetic"), not a test fixture.
 
 from __future__ import annotations
 
+import hashlib
 import random
 from collections.abc import Iterator
 
@@ -32,22 +33,31 @@ class SyntheticAdapter:
     ) -> None:
         self.memories_per_user = max(1, memories_per_user)
         self.content_chars = max(1, content_chars)
+        # The runner initializes the run seed through users() before consuming
+        # any corpus or query stream. Direct use without users() retains seed 0.
+        self._seed = 0
         # A field for --filter to select on. 0 leaves metadata empty, so the
         # corpus is byte-identical to one built without this option; N spreads
         # items over N values, so a single-value filter selects about 1/N.
         self.categories = max(0, categories)
 
     def _user_rng(self, user: UserId, seed: int) -> random.Random:
-        h = (seed * 1_000_003) & 0xFFFFFFFF
+        if seed != 0:
+            # Include the full signed seed, independent of Python hash salts.
+            digest = hashlib.sha256(f"{seed}:{user}".encode()).digest()
+            return random.Random(int.from_bytes(digest, "big"))
+        # Preserve the historical seed-zero corpus byte for byte.
+        h = 0
         for ch in user.encode("utf-8"):
             h = (h ^ ch) * 1_000_003 & 0xFFFFFFFF
         return random.Random(h)
 
     def users(self, n_users: int, *, seed: int = 0) -> list[UserId]:
+        self._seed = seed
         return [f"syn_user_{i:05d}" for i in range(n_users)]
 
     def memory_stream(self, user: UserId) -> Iterator[MemoryItem]:
-        rng = self._user_rng(user + "::mem", 0)
+        rng = self._user_rng(user + "::mem", self._seed)
         for i in range(self.memories_per_user):
             content = f"{user} memory {i}: " + _filler(rng, self.content_chars)
             # cat_<i mod N>, the same naming the REST bench uses, so a filter

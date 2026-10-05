@@ -72,18 +72,47 @@ def _payload(memory_count: int, *, users: int = 2, empty_rate: float = 0.0):
     }
 
 
-def test_namespaced_dataset_preserves_source_contents_and_changes_identity():
+@pytest.mark.parametrize("seed", [0, 42, -7])
+def test_namespaced_dataset_preserves_source_contents_and_changes_identity(seed):
     source = SyntheticAdapter(memories_per_user=3)
-    expected_user = source.users(1, seed=0)[0]
+    expected_user = source.users(1, seed=seed)[0]
     expected = list(source.memory_stream(expected_user))
 
     wrapped = NamespacedDataset(source, "point_a_")
-    user = wrapped.users(1, seed=0)[0]
+    user = wrapped.users(1, seed=seed)[0]
     actual = list(wrapped.memory_stream(user))
 
     assert user == f"point_a_{expected_user}"
     assert [item.content for item in actual] == [item.content for item in expected]
     assert {item.producer for item in actual} == {user}
+
+
+@pytest.mark.parametrize("seed", [42, -7])
+def test_growth_points_and_repetitions_keep_seeded_query_prefix(seed):
+    from itertools import islice
+
+    from ltm100.core.scenarios import SearchLoad
+
+    source = SyntheticAdapter(memories_per_user=20)
+    original = source.users(2, seed=seed)
+    expected = {u: list(source.memory_stream(u)) for u in original}
+    for namespace, count in (
+        ("point10_repeat1_", 10),
+        ("point20_repeat1_", 20),
+        ("point10_repeat2_", 10),
+    ):
+        wrapped = NamespacedDataset(SyntheticAdapter(memories_per_user=20), namespace)
+        users = wrapped.users(2, seed=seed)
+        for user, original_user in zip(users, original):
+            ingested = list(islice(wrapped.memory_stream(user), count))
+            assert [item.content for item in ingested] == [
+                item.content for item in expected[original_user][:count]
+            ]
+            scenario = SearchLoad(query_limit=5)
+            operations = list(islice(scenario.plan(user, wrapped, {"seed": seed}), 5))
+            assert {op.query.query for op in operations} == {
+                item.content for item in expected[original_user][:5]
+            }
 
 
 @pytest.mark.parametrize(
