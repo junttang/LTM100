@@ -4,6 +4,8 @@
 # dialogue turns, so it cannot run chat-replay. Basic add throughput example:
 #   ltm100 run --config examples/synthetic.yaml \
 #       --scenario add-load --users 20 --duration 30 --seed 0
+# --seed controls corpus content and workload scheduling. Keep it fixed for
+# comparable runs; seed 0 preserves the original corpus and user IDs stay stable.
 #
 # For search-load, pre-ingest the corpus before the measured run:
 #   ltm100 run --config examples/synthetic.yaml \
