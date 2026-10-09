@@ -13,7 +13,7 @@
       "p99_requests_per_bin": 1,
       "max_requests_per_bin": 1,
       "empty_bin_fraction": 0.97,
-      "mean_in_flight": 0.030204920371373494,
+      "mean_in_flight": 0.0302049195,
       "peak_in_flight": 2
     },
     "search": {
@@ -24,7 +24,7 @@
       "p99_requests_per_bin": 1,
       "max_requests_per_bin": 1,
       "empty_bin_fraction": 0.985,
-      "mean_in_flight": 0.09013667186101278,
+      "mean_in_flight": 0.09013667233333333,
       "peak_in_flight": 2
     },
     "all": {
@@ -35,7 +35,7 @@
       "p99_requests_per_bin": 1,
       "max_requests_per_bin": 1,
       "empty_bin_fraction": 0.955,
-      "mean_in_flight": 0.12034159223238627,
+      "mean_in_flight": 0.12034159183333333,
       "peak_in_flight": 2
     }
   }

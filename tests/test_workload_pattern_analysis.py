@@ -5,7 +5,9 @@ from __future__ import annotations
 import csv
 import importlib.util
 import json
+import math
 import sys
+from decimal import Decimal
 from itertools import pairwise
 from pathlib import Path
 from xml.etree import ElementTree
@@ -31,6 +33,163 @@ plot = load_example("plot")
 
 def record(op, start, end, status="ok"):
     return {"op_type": op, "started_at": start, "ended_at": end, "status": status}
+
+
+@pytest.mark.parametrize("origin", [0, 17.25, 1_700_000_000.25])
+def test_decimal_boundary_requests_occupy_distinct_burst_bins(origin):
+    records = [
+        record("search", origin + 1.1, origin + 1.2),
+        record("search", origin + 1.2, origin + 1.3),
+    ]
+    rows, stats = analysis.burst_distribution(
+        records, start=origin, end=origin + 2, interval=0.1
+    )
+    assert {
+        row["requests_per_bin"]: row["bins"] for row in rows if row["op_type"] == "all"
+    } == {0: 18, 1: 2}
+    assert stats["all"]["p99_requests_per_bin"] == 1
+    assert stats["all"]["max_requests_per_bin"] == 1
+    assert stats["all"]["empty_bin_fraction"] == 0.9
+
+
+@pytest.mark.parametrize("origin", [0, 17.25, 1_700_000_000.25])
+def test_decimal_lifetime_boundary_has_no_phantom_peak(origin):
+    rows = analysis.inflight_rows(
+        [record("search", origin + 1.2, origin + 1.3)],
+        start=origin,
+        end=origin + 2,
+        interval=0.1,
+    )
+    assert len(rows) == 20
+    assert rows[12]["search_mean"] == rows[12]["search_peak"] == 1
+    assert all(
+        row["total_mean"] == row["total_peak"] == 0
+        for index, row in enumerate(rows)
+        if index != 12
+    )
+
+
+@pytest.mark.parametrize("origin", [0, 17.25, 1_700_000_000.25])
+def test_boundary_adjacent_floats_remain_distinct_without_epsilon(origin):
+    boundary = origin + 1.2
+    before = math.nextafter(boundary, -math.inf)
+    after = math.nextafter(boundary, math.inf)
+    following = math.nextafter(after, math.inf)
+    # A real, one-representable-step request before a boundary must survive.
+    rows = analysis.inflight_rows(
+        [record("add", before, boundary)],
+        start=origin,
+        end=origin + 2,
+        interval=0.1,
+    )
+    assert rows[11]["add_mean"] > 0
+    assert rows[11]["total_peak"] == 1
+    assert rows[12]["total_mean"] == rows[12]["total_peak"] == 0
+    records = [
+        record("add", before, boundary),
+        record("add", boundary, after),
+        record("add", after, following),
+    ]
+    rows = analysis.inflight_rows(records, start=origin, end=origin + 2, interval=0.1)
+    assert rows[11]["total_peak"] == rows[12]["total_peak"] == 1
+    assert all(row["total_peak"] <= 1 for row in rows)
+    _, stats = analysis.burst_distribution(
+        records, start=origin, end=origin + 2, interval=0.1
+    )
+    assert stats["all"]["requests"] == 3
+    assert stats["all"]["max_requests_per_bin"] == 2
+    assert stats["all"]["empty_bin_fraction"] == 0.9
+
+
+def test_decimal_bin_count_and_end_exclusion():
+    records = [record("add", 0.3, 0.4)]
+    rows = analysis.inflight_rows(records, start=0, end=0.3, interval=0.1)
+    assert len(rows) == 3
+    assert all(row["interval_seconds"] == 0.1 for row in rows)
+    assert all(row["total_peak"] == row["total_mean"] == 0 for row in rows)
+    _, stats = analysis.burst_distribution(records, start=0, end=0.3, interval=0.1)
+    assert stats["all"]["requests"] == 0
+    assert stats["all"]["empty_bin_fraction"] == 1
+    rows = analysis.inflight_rows([], start=0, end=0.07, interval=0.01)
+    assert len(rows) == 7  # Binary division previously produced an eighth bin.
+    assert all(row["interval_seconds"] == 0.01 for row in rows)
+
+
+@pytest.mark.parametrize("origin", [0, 17.25, 1_700_000_000.25])
+@pytest.mark.parametrize("interval", [0.01, 0.1, 0.2])
+def test_decimal_bins_match_independent_overlap_and_histogram_reference(
+    origin, interval
+):
+    # Decimal arithmetic is independent of the implementation's Fraction sweep.
+    def decimal(value):
+        return Decimal(str(value))
+
+    starts = [
+        float(decimal(origin) + decimal(index) * decimal(interval))
+        for index in range(15)
+    ]
+    records = [
+        record(
+            "add" if index % 2 else "search",
+            start,
+            float(decimal(start) + decimal(interval) * Decimal("1.5")),
+        )
+        for index, start in enumerate(starts)
+    ]
+    records += [
+        record("add", math.nextafter(start, -math.inf), start) for start in starts[1:]
+    ]
+    end = float(decimal(origin) + decimal(interval) * 20)
+    rows = analysis.inflight_rows(records, start=origin, end=end, interval=interval)
+    expected_starts = []
+    for index, row in enumerate(rows):
+        left = decimal(origin) + index * decimal(interval)
+        right = left + decimal(interval)
+        expected_starts.append(
+            sum(left <= decimal(item["started_at"]) < right for item in records)
+        )
+        for op, prefix in (("add", "add"), ("search", "search"), (None, "total")):
+            selected = [item for item in records if op is None or item["op_type"] == op]
+            area = sum(
+                max(
+                    Decimal(0),
+                    min(right, decimal(item["ended_at"]))
+                    - max(left, decimal(item["started_at"])),
+                )
+                for item in selected
+            )
+            times = sorted(
+                {left, right}
+                | {
+                    decimal(item[field])
+                    for item in selected
+                    for field in ("started_at", "ended_at")
+                    if left < decimal(item[field]) < right
+                }
+            )
+            peak = max(
+                sum(
+                    decimal(item["started_at"])
+                    <= (a + b) / 2
+                    < decimal(item["ended_at"])
+                    for item in selected
+                )
+                for a, b in pairwise(times)
+            )
+            assert row[f"{prefix}_mean"] == pytest.approx(
+                float(area / (right - left)), rel=1e-15, abs=1e-30
+            )
+            assert row[f"{prefix}_peak"] == peak
+    histogram, _ = analysis.burst_distribution(
+        records, start=origin, end=end, interval=interval
+    )
+    assert {
+        row["requests_per_bin"]: row["bins"]
+        for row in histogram
+        if row["op_type"] == "all"
+    } == {
+        count: expected_starts.count(count) for count in range(max(expected_starts) + 1)
+    }
 
 
 def test_exact_overlap_mean_and_peak_with_tied_end_and_start():

@@ -139,6 +139,10 @@ An operation is in flight from its recorded start until its recorded end,
 using a half-open interval `[start, end)`. If one operation ends exactly when
 another starts, they do not overlap. Rejected operations were not dispatched
 and are excluded; dispatched failures still occupy time until completion.
+Recorded timestamps and configured intervals are interpreted by their decimal
+representations, with exact arithmetic for bin boundaries and overlap durations.
+A request at 1.2 seconds therefore belongs to `[1.2, 1.3)` for 100 ms bins;
+the adjacent representable timestamp before it remains in the preceding bin.
 
 The filled areas show the **time-weighted mean** add/search concurrency in
 each 5-second bin. The dark line shows the **actual maximum simultaneous

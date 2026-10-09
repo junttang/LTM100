@@ -7,9 +7,25 @@ import csv
 import json
 import math
 from collections import Counter, defaultdict
+from fractions import Fraction
 from pathlib import Path
 
 from ltm100.metrics.aggregate import _percentiles
+
+
+def _time(value: float) -> Fraction:
+    """Use the recorded decimal value without introducing binary rounding.
+
+    Convert absolute timestamps before subtracting the window origin. Exact
+    arithmetic keeps decimal boundaries and adjacent representable floats
+    distinct, including large epoch timestamps. Output values remain floats.
+    """
+    return Fraction(str(value))
+
+
+def _bucket_index(offset: Fraction, interval: Fraction) -> int:
+    """Assign an offset to its half-open bin without rounding or tolerance."""
+    return offset // interval
 
 
 def inflight_rows(
@@ -25,26 +41,27 @@ def inflight_rows(
         raise ValueError("boundaries and interval must be finite")
     if end <= start or interval <= 0:
         raise ValueError("end must exceed start and interval must be > 0")
-    duration = end - start
+    origin, limit, width = _time(start), _time(end), _time(interval)
+    duration = limit - origin
     rows = [
         {
-            "elapsed_start_s": index * interval,
-            "interval_seconds": min(interval, duration - index * interval),
-            "add_mean": 0.0,
-            "search_mean": 0.0,
+            "elapsed_start_s": float(index * width),
+            "interval_seconds": float(min(width, duration - index * width)),
+            "add_mean": Fraction(0),
+            "search_mean": Fraction(0),
             "total_mean": 0.0,
             "add_peak": 0,
             "search_peak": 0,
             "total_peak": 0,
         }
-        for index in range(math.ceil(duration / interval))
+        for index in range(math.ceil(duration / width))
     ]
-    events: dict[float, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    events: dict[Fraction, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for record in records:
         if record["status"] == "rejected":
             continue
-        left = max(record["started_at"], start) - start
-        right = min(record["ended_at"], end) - start
+        left = max(_time(record["started_at"]), origin) - origin
+        right = min(_time(record["ended_at"]), limit) - origin
         if right <= left:
             continue
         op = record["op_type"]
@@ -55,15 +72,10 @@ def inflight_rows(
 
     counts = {"add": 0, "search": 0}
 
-    def integrate(left: float, right: float) -> None:
+    def integrate(left: Fraction, right: Fraction) -> None:
         while left < right:
-            index = min(int(left / interval), len(rows) - 1)
-            boundary = min((index + 1) * interval, duration, right)
-            # Floating-point division can place an exact boundary just below
-            # its bucket. Advance instead of integrating a zero-width slice.
-            if boundary <= left:
-                index += 1
-                boundary = min((index + 1) * interval, duration, right)
+            index = _bucket_index(left, width)
+            boundary = min((index + 1) * width, duration, right)
             row = rows[index]
             for op, count in counts.items():
                 row[f"{op}_mean"] += count * (boundary - left)
@@ -71,16 +83,17 @@ def inflight_rows(
             row["total_peak"] = max(row["total_peak"], sum(counts.values()))
             left = boundary
 
-    previous = 0.0
+    previous = Fraction(0)
     for timestamp, changes in sorted(events.items()):
         integrate(previous, timestamp)
         for op, delta in changes.items():
             counts[op] += delta
         previous = timestamp
     integrate(previous, duration)
-    for row in rows:
+    for index, row in enumerate(rows):
+        exposure = min(width, duration - index * width)
         for op in counts:
-            row[f"{op}_mean"] /= row["interval_seconds"]
+            row[f"{op}_mean"] = float(row[f"{op}_mean"] / exposure)
         row["total_mean"] = row["add_mean"] + row["search_mean"]
     return rows
 
@@ -93,7 +106,8 @@ def burst_distribution(
         raise ValueError("boundaries and interval must be finite")
     if end <= start or interval <= 0:
         raise ValueError("end must exceed start and interval must be > 0")
-    ratio = (end - start) / interval
+    origin, limit, width = _time(start), _time(end), _time(interval)
+    ratio = (limit - origin) / width
     if not math.isclose(ratio, round(ratio), rel_tol=1e-10, abs_tol=1e-8):
         raise ValueError("window width must be a whole number of burst intervals")
     size = round(ratio)
@@ -106,7 +120,9 @@ def burst_distribution(
         op = record["op_type"]
         if op not in ("add", "search"):
             raise ValueError(f"unsupported operation: {op}")
-        index = min(int((record["started_at"] - start) / interval), size - 1)
+        index = min(
+            _bucket_index(_time(record["started_at"]) - origin, width), size - 1
+        )
         bins[op][index] += 1
         bins["all"][index] += 1
     rows = []
