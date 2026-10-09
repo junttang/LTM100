@@ -1,0 +1,107 @@
+{
+  "meta": {
+    "example": "fixed-delay chat-replay; no real LTM server",
+    "dataset": "generated alternating dialogue; one item per turn",
+    "config": {
+      "users": 64,
+      "duration": 1800,
+      "user_start_interval": 4,
+      "seed": 0,
+      "search_latency": 0.6,
+      "add_latency": 0.1,
+      "answer_time": 18,
+      "answer_time_variation_seconds": 3,
+      "user_gap": 84,
+      "user_gap_variation_seconds": 40,
+      "top_k": 20,
+      "turn_pairs": 128,
+      "bucket_seconds": 5
+    },
+    "model": "closed",
+    "global_concurrency": 0,
+    "concurrent_sessions": 1,
+    "rampup": 256,
+    "measurement_started_at": 1791515976.2002065,
+    "measurement_ended_at": 1791517776.7389438
+  },
+  "summary": {
+    "total": 3197,
+    "throughput_ops_s": 1.7755830091720906,
+    "qps": 1.7755830091720906,
+    "offered": 3197,
+    "accepted": 3197,
+    "successful": 3197,
+    "errors": 0,
+    "rejected": 0,
+    "offered_ops_s": 1.7755830091720906,
+    "accepted_ops_s": 1.7755830091720906,
+    "successful_ops_s": 1.7755830091720906,
+    "rejected_ops_s": 0.0,
+    "rejection_rate": 0.0,
+    "errors_by_kind": {},
+    "by_op": {
+      "search": {
+        "count": 1069,
+        "throughput_ops_s": 0.5937123042868203,
+        "qps": 0.5937123042868203,
+        "offered": 1069,
+        "accepted": 1069,
+        "successful": 1069,
+        "errors": 0,
+        "rejected": 0,
+        "offered_ops_s": 0.5937123042868203,
+        "accepted_ops_s": 0.5937123042868203,
+        "successful_ops_s": 0.5937123042868203,
+        "rejected_ops_s": 0.0,
+        "rejection_rate": 0.0,
+        "latency_ms": {
+          "mean": 600.9348074446447,
+          "p50": 600.8822917938232,
+          "p90": 601.4463901519775,
+          "p95": 601.790189743042,
+          "p99": 602.1926403045654,
+          "max": 603.8906574249268
+        },
+        "error_rate": 0.0,
+        "errors_by_kind": {},
+        "items": {
+          "mean": 1.0,
+          "empty": 0,
+          "empty_rate": 0.0
+        }
+      },
+      "add": {
+        "count": 2128,
+        "throughput_ops_s": 1.1818707048852701,
+        "qps": 1.1818707048852701,
+        "offered": 2128,
+        "accepted": 2128,
+        "successful": 2128,
+        "errors": 0,
+        "rejected": 0,
+        "offered_ops_s": 1.1818707048852701,
+        "accepted_ops_s": 1.1818707048852701,
+        "successful_ops_s": 1.1818707048852701,
+        "rejected_ops_s": 0.0,
+        "rejection_rate": 0.0,
+        "latency_ms": {
+          "mean": 100.60392208117291,
+          "p50": 100.53682327270508,
+          "p90": 100.97432136535645,
+          "p95": 101.25732421875,
+          "p99": 101.85098648071289,
+          "max": 103.28412055969238
+        },
+        "error_rate": 0.0,
+        "errors_by_kind": {},
+        "items": {
+          "mean": 1.0,
+          "empty": 0,
+          "empty_rate": 0.0
+        }
+      }
+    },
+    "error_rate": 0.0,
+    "wall_seconds": 1800.535364
+  }
+}

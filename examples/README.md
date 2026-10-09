@@ -32,3 +32,8 @@ non-empty from the start. Each YAML header contains a complete run command and
 backend-specific limitations.
 
 See the root [README](../README.md) for scenario details and common flags.
+
+For an offline illustration of `chat-replay` request timing, see
+[Workload patterns](../docs/workload-patterns.md). The scripts and preset in
+`workload-patterns/` use a fixed-delay backend and are separate from the
+backend configurations above.

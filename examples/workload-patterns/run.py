@@ -233,7 +233,9 @@ async def run_case(config: PatternConfig, users: int, output: Path) -> list[OpRe
         with (case_output / "request-counts.csv").open(
             "w", newline="", encoding="utf-8"
         ) as file:
-            writer = csv.DictWriter(file, fieldnames=list(counts[0]))
+            writer = csv.DictWriter(
+                file, fieldnames=list(counts[0]), lineterminator="\n"
+            )
             writer.writeheader()
             writer.writerows(counts)
     print(f"Finished {users} users: {len(results)} requests -> {case_output}")

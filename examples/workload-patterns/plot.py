@@ -14,6 +14,7 @@ def plot_counts(paths: list[Path], output: Path) -> None:
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.ticker import MaxNLocator
 
     if not paths:
         raise ValueError("no request-counts.csv files found")
@@ -43,7 +44,9 @@ def plot_counts(paths: list[Path], output: Path) -> None:
         bin_seconds = float(rows[0]["interval_seconds"])
         axis.set_ylabel(f"Requests / {bin_seconds:g} s bin")
         axis.set_xlim(0, starts[-1] + widths[-1])
-        axis.set_ylim(bottom=0)
+        peak = max(add + search for add, search in zip(adds, searches))
+        axis.set_ylim(0, peak * 1.3 if peak else 1)
+        axis.yaxis.set_major_locator(MaxNLocator(integer=True))
         axis.grid(axis="y", alpha=0.2)
         axis.set_axisbelow(True)
         axis.legend(loc="upper left", ncols=2)
