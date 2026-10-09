@@ -1,0 +1,17 @@
+# Fixed-delay illustration, not a configuration for `ltm100 run`.
+# Run from the repository root:
+#   python examples/workload-patterns/run.py --output out/workload-patterns
+# The four cases run concurrently, each for 30 real minutes.
+users: [1, 16, 64, 256]
+duration: 1800
+user_start_interval: 4
+seed: 0
+search_latency: 0.6
+add_latency: 0.1
+answer_time: 18
+answer_time_variation_seconds: 3
+user_gap: 84
+user_gap_variation_seconds: 40
+top_k: 20
+turn_pairs: 128
+bucket_seconds: 5
