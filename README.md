@@ -125,6 +125,8 @@ percentiles. See [Reports](docs/running.md#reports) for the output contract.
   and comparison semantics.
 - [Scenario guide](docs/scenarios.md) — per-scenario data flow and behavior.
 - [Load models](docs/load-models.md) — closed/open scheduling and congestion.
+- [Workload patterns](docs/workload-patterns.md) — fixed-delay chat-replay
+  example with recorded request-count graphs.
 - [Example configurations](examples/README.md) — YAML selection guide.
 - [Design](DESIGN.md) — adapter contracts, lifecycle, metrics, and roadmap.
 

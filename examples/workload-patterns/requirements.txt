@@ -1,0 +1,2 @@
+# Optional, only for the post-run plot script.
+matplotlib>=3.7

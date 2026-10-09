@@ -1,0 +1,42 @@
+{
+  "inflight_interval_seconds": 5,
+  "burst_interval_seconds": 0.1,
+  "window_start_s": 1200,
+  "window_end_s": 1800,
+  "window_bins": 6000,
+  "stats": {
+    "add": {
+      "requests": 12,
+      "requests_s": 0.02,
+      "mean_requests_per_bin": 0.002,
+      "p95_requests_per_bin": 0,
+      "p99_requests_per_bin": 0,
+      "max_requests_per_bin": 1,
+      "empty_bin_fraction": 0.998,
+      "mean_in_flight": 0.0020168428333333334,
+      "peak_in_flight": 1
+    },
+    "search": {
+      "requests": 6,
+      "requests_s": 0.01,
+      "mean_requests_per_bin": 0.001,
+      "p95_requests_per_bin": 0,
+      "p99_requests_per_bin": 0,
+      "max_requests_per_bin": 1,
+      "empty_bin_fraction": 0.999,
+      "mean_in_flight": 0.006008000166666667,
+      "peak_in_flight": 1
+    },
+    "all": {
+      "requests": 18,
+      "requests_s": 0.03,
+      "mean_requests_per_bin": 0.003,
+      "p95_requests_per_bin": 0,
+      "p99_requests_per_bin": 0,
+      "max_requests_per_bin": 1,
+      "empty_bin_fraction": 0.997,
+      "mean_in_flight": 0.008024843,
+      "peak_in_flight": 1
+    }
+  }
+}
