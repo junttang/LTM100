@@ -118,3 +118,80 @@ python examples/workload-patterns/plot.py \
     --input docs/assets/workload-patterns \
     --output out/workload-patterns-recorded.svg
 ```
+
+## Concurrency and short-bin bursts
+
+Two additional views use the **same raw records**, without rerunning the
+workload or changing its timing. Reconstruct these reports after a run:
+
+```sh
+python examples/workload-patterns/analyze.py \
+    --input out/workload-patterns --output out/workload-patterns
+python examples/workload-patterns/plot.py --kind inflight \
+    --input out/workload-patterns --output out/workload-patterns/inflight.png
+python examples/workload-patterns/plot.py --kind bursts \
+    --input out/workload-patterns --output out/workload-patterns/bursts.png
+```
+
+### In-flight requests over the full run
+
+An operation is in flight from its recorded start until its recorded end,
+using a half-open interval `[start, end)`. If one operation ends exactly when
+another starts, they do not overlap. Rejected operations were not dispatched
+and are excluded; dispatched failures still occupy time until completion.
+
+The filled areas show the **time-weighted mean** add/search concurrency in
+each 5-second bin. The dark line shows the **actual maximum simultaneous
+total** in that bin, computed from individual start/end events. It does not
+mean that concurrency stayed at that maximum for all five seconds. Short
+requests are retained even when they finish between sampling boundaries.
+The combined peak is computed directly, rather than summing add and search
+peaks that might occur at different times.
+
+![Mean and peak in-flight requests over the 30-minute runs](assets/workload-patterns/chat-replay-inflight.png)
+
+The 256-user run builds up during ramp-up, but its last-10-minute mean is
+only **1.968 in-flight requests**, with an observed peak of **9**. Most users
+are waiting for an answer or reading/typing, rather than calling the backend.
+Virtual-user count therefore differs substantially from request concurrency.
+
+Search contributes **1.473** mean in-flight requests and add contributes
+**0.495** in that window. Although adds occur about twice as often, searches
+last about six times longer, giving them roughly three times the residence
+time. The observed total start rate is **7.368 requests/s**; its mix and fixed
+delays explain why mean concurrency is approximately two.
+
+### Requests per 100 ms in the comparison window
+
+For all cases, the histogram uses **20–30 minutes**, after ramp-up and initial
+chat starts. Each of its **6,000 non-overlapping 100 ms bins** counts add and
+search starts together. Empty bins are included. The histogram measures
+short-window dispatch counts, not latency or in-flight concurrency.
+
+![Distribution of total requests starting in a 100 ms bin](assets/workload-patterns/chat-replay-bursts.png)
+
+| Users | Mean in flight | Peak in flight | Empty 100 ms bins | p99 starts / 100 ms | Maximum starts / 100 ms |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 0.008 | 1 | 99.70% | 0 | 1 |
+| 16 | 0.120 | 2 | 95.50% | 1 | 1 |
+| 64 | 0.484 | 4 | 83.18% | 2 | 3 |
+| 256 | 1.968 | 9 | 47.15% | 3 | 5 |
+
+All table values use the **20–30-minute window**, whereas the in-flight
+figure covers the full run. For one user, p99 is zero because more than 99%
+of the bins contain no dispatch; the workload still issued 18 requests in
+this window. With 256 users, 47.15% of bins remain empty, while p99 is three
+requests per bin and the observed maximum is five. These are percentiles of
+**request counts**, not response-time percentiles or a server capacity limit.
+
+The analysis writes `inflight.csv`, `burst-histogram.csv`, and
+`pattern-statistics.json` per case. The JSON includes add, search, and combined
+statistics, including p95/p99, maxima, and empty-bin fractions. The committed
+derived files can redraw both images without raw data: replace `--input` in
+the two plotting commands with `docs/assets/workload-patterns`.
+
+`analyze.py` accepts `--inflight-interval`, `--burst-interval`, `--window-start`,
+and `--window-end` in seconds. The distribution window must fit inside the
+recorded measurement and contain a whole number of burst intervals, avoiding
+partial-bin exposure bias. These figures describe one fixed-delay example;
+their values depend on the chosen window, bin width, seed, and timing model.

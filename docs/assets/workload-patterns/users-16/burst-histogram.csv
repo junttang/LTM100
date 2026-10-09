@@ -1,0 +1,7 @@
+op_type,requests_per_bin,bins,fraction,cumulative_fraction
+add,0,5820,0.97,0.97
+add,1,180,0.03,1.0
+search,0,5910,0.985,0.985
+search,1,90,0.015,1.0
+all,0,5730,0.955,0.955
+all,1,270,0.045,1.0
