@@ -8,11 +8,14 @@ access rather than materializing the whole dataset as Python objects.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+import random
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
+from ltm100.adapters.datasets.longmemeval import _split_chunks
 from ltm100.agent import AgentMessage, AgentTask, AgentToolCall
+from ltm100.common import MemoryItem, UserId
 
 DATASET_ID = "nebius/SWE-rebench-openhands-trajectories"
 DEFAULT_REVISION = "35455389ab51bf5e2306bfd436ef72d0f98bf882"
@@ -49,6 +52,8 @@ class NebiusAdapter:
         self.revision = revision
         self.chunk_chars = chunk_chars
         self._records: Sequence[dict[str, Any]] | None = None
+        self._assignments: dict[UserId, tuple[int, ...]] = {}
+        self._validated = False
 
     # -- loading -----------------------------------------------------------
 
@@ -139,6 +144,96 @@ class NebiusAdapter:
             raise ValueError(
                 f"invalid nebius trajectory at {source}, row {index}: {exc}"
             ) from exc
+
+    # -- DatasetAdapter / AgentDataset -------------------------------------
+
+    def users(self, n_users: int, *, seed: int = 0) -> list[UserId]:
+        """Shuffle selected tasks, then distribute them across virtual users.
+
+        Each worker calls this with the whole run's user count before user
+        sharding, so assignment is independent of process count. A short
+        source repeats across users, whose backend identities remain unique.
+        """
+        if isinstance(n_users, bool) or not isinstance(n_users, int) or n_users < 0:
+            raise ValueError("nebius n_users must be a non-negative integer")
+        indices = list(range(len(self._load())))
+        if n_users and not self._validated:
+            # Generic scenarios materialize memory_stream inside async plans,
+            # whose exceptions are collected by the runner. Validate selected
+            # source records here, before backend setup, without retaining them.
+            identifiers: set[str] = set()
+            for index in indices:
+                task = self._task(index)
+                if task.trajectory_id in identifiers:
+                    raise ValueError(
+                        f"duplicate nebius trajectory_id: {task.trajectory_id}"
+                    )
+                identifiers.add(task.trajectory_id)
+            self._validated = True
+        random.Random(seed).shuffle(indices)
+        self._assignments = {}
+        if not indices:
+            return []
+        for i in range(n_users):
+            user = f"neb_user_{i:05d}"
+            assigned = (
+                indices[i::n_users]
+                if n_users <= len(indices)
+                else [indices[i % len(indices)]]
+            )
+            self._assignments[user] = tuple(assigned)
+        return list(self._assignments)
+
+    def task_indices(self, user: UserId) -> tuple[int, ...]:
+        """Selected-source row indices assigned to a user, in replay order."""
+        try:
+            return self._assignments[user]
+        except KeyError as exc:
+            raise ValueError(
+                f"unknown nebius user {user!r}; call users() first"
+            ) from exc
+
+    def task_stream(self, user: UserId) -> Iterator[AgentTask]:
+        """Yield assigned tasks once; the consuming scenario owns wrap-around."""
+        for index in self.task_indices(user):
+            yield self._task(index)
+
+    def memory_stream(self, user: UserId) -> Iterator[MemoryItem]:
+        """Project source activity to a finite, backend-neutral corpus.
+
+        Generic add/search scenarios can use this projection; it is not a
+        coding-agent integration policy. Source events remain available in
+        ``task_stream`` without chunking or loss of their boundaries.
+        """
+        for task in self.task_stream(user):
+            for i, message in enumerate(task.messages):
+                if message.role == "system":
+                    continue
+                terminal = i == len(task.messages) - 1
+                content = _message_content(
+                    message, task.final_response if terminal else None
+                )
+                for chunk in _split_chunks(content, self.chunk_chars):
+                    yield MemoryItem(content=chunk, producer=user, role=message.role)
+
+
+def _message_content(message: AgentMessage, final_response: str | None) -> str:
+    parts = [message.content] if message.content.strip() else []
+    if message.role == "tool":
+        parts.insert(0, f"Tool result: {message.name}")
+    for call in message.tool_calls:
+        if final_response is not None and call.name == "finish":
+            if (
+                final_response.strip()
+                and final_response.strip() != message.content.strip()
+            ):
+                parts.append(final_response)
+        else:
+            arguments = json.dumps(
+                call.arguments, ensure_ascii=False, sort_keys=True, allow_nan=False
+            )
+            parts.append(f"Tool call: {call.name}\nArguments: {arguments}")
+    return "\n\n".join(parts)
 
 
 def _text(value: Any, field: str, *, nonempty: bool = False) -> str:
