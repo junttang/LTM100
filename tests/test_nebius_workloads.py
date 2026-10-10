@@ -304,3 +304,42 @@ def test_real_local_parquet_matches_json(tmp_path):
             }
         )
     assert snapshots[0] == snapshots[1]
+
+
+def test_parquet_schema_and_row_group_cache(tmp_path, monkeypatch):
+    arrow = pytest.importorskip("pyarrow")
+    parquet = pytest.importorskip("pyarrow.parquet")
+    from ltm100.adapters.datasets.nebius import _ParquetRecords
+
+    source = tmp_path / "source.json"
+    _write_source(source, 3)
+    path = tmp_path / "source.parquet"
+    parquet.write_table(
+        arrow.Table.from_pylist(json.loads(source.read_text())), path, row_group_size=1
+    )
+    reader = _ParquetRecords(path, 2)
+    original_file = reader._file
+    reads = []
+
+    class TracedFile:
+        def read_row_group(self, group, columns):
+            reads.append((group, columns))
+            return original_file.read_row_group(group, columns=columns)
+
+    reader._file = TracedFile()
+    assert len(reader) == 2
+    assert reader[0]["trajectory_id"] == "trace-0"
+    assert reader[0]["trajectory_id"] == "trace-0"
+    assert reader[-1]["trajectory_id"] == "trace-1"
+    assert [group for group, _ in reads] == [0, 1]
+    assert all(columns == list(reader._columns) for _, columns in reads)
+    with pytest.raises(IndexError):
+        reader[2]
+    with pytest.raises(IndexError):
+        reader[-3]
+    assert len(reader[:1]) == 1
+    assert len(_ParquetRecords(path, 0)) == 0
+    bad = tmp_path / "bad.parquet"
+    parquet.write_table(arrow.Table.from_pylist([{"wrong": "schema"}]), bad)
+    with pytest.raises(ValueError, match="missing columns"):
+        NebiusAdapter(path=str(bad)).users(1, seed=0)

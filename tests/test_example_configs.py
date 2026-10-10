@@ -13,6 +13,7 @@ RECOMMENDED_SCENARIOS = {
     "memmachine.yaml": ("chat-replay",),
     "memmachine-mcp.yaml": ("chat-replay",),
     "synthetic.yaml": ("add-load", "search-load", "mixed"),
+    "nebius.yaml": ("add-load", "search-load", "mixed"),
     "mem0.yaml": ("add-load", "search-load", "mixed"),
     "supermemory.yaml": ("add-load", "search-load", "mixed"),
     "shared-project.yaml": ("add-load", "search-load", "mixed"),
@@ -38,10 +39,26 @@ def test_example_config_builds_adapters(filename: str, monkeypatch) -> None:
     ],
 )
 def test_example_recommends_a_compatible_scenario(
-    filename: str, scenario_name: str
+    filename: str, scenario_name: str, monkeypatch
 ) -> None:
     config = load_config(EXAMPLES / filename)
     dataset = build_dataset(config.dataset)
+    if filename == "nebius.yaml":
+        # Keep example compatibility checks offline, just as construction of
+        # a LongMemEval chat adapter does not download its source here.
+        dataset._records = [
+            {
+                "trajectory_id": "example-0",
+                "instance_id": "example/repo-0",
+                "repo": "example/repo",
+                "exit_status": "submit",
+                "resolved": 0,
+                "trajectory": [
+                    {"role": "user", "content": "request"},
+                    {"role": "assistant", "content": "response"},
+                ],
+            }
+        ]
     scenario = get_scenario(scenario_name)
     validate = getattr(scenario, "validate", None)
 

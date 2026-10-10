@@ -22,6 +22,11 @@ LongMemEval supports all four scenarios. Synthetic data supports `add-load`,
 `search-load`, and `mixed`, but not `chat-replay`, because it has no structured
 dialogue `turn_stream`.
 
+Nebius agent trajectories support the same generic add/search workloads via
+`examples/nebius.yaml`. They preserve structured tasks for a future
+coding-agent scenario and intentionally reject `chat-replay`. See the
+[Nebius guide](nebius.md) for loading, user mapping, and corpus size controls.
+
 ## Workload examples
 
 ### Chatbot-LTM integration

@@ -35,7 +35,7 @@ pip install -e ".[dev]"
 Install optional dependencies when needed:
 
 ```sh
-pip install -e ".[dev,datasets]"      # LongMemEval via Hugging Face
+pip install -e ".[dev,datasets]"      # LongMemEval / Nebius via Hugging Face
 pip install -e ".[dev,datasets,mcp]"  # LongMemEval + MCP transport
 ```
 
@@ -91,6 +91,8 @@ Datasets:
 - **LongMemEval** — local JSON or Hugging Face loading, with structured
   user/assistant turns for `chat-replay`.
 - **Synthetic** — deterministic, download-free data for load probes.
+- **Nebius** — structured coding-agent trajectories and corpus streams for
+  generic add/search workloads; see the [dataset guide](docs/nebius.md).
 
 Backends:
 

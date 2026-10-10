@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import random
+from bisect import bisect_right
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -72,31 +73,23 @@ class NebiusAdapter:
 
     def _load_arrow(self, source: Path | None = None) -> Sequence[dict[str, Any]]:
         try:
-            from datasets import load_dataset
+            if source is None:
+                from huggingface_hub import hf_hub_download
+
+                source = Path(
+                    hf_hub_download(
+                        repo_id=DATASET_ID,
+                        filename="trajectories.parquet",
+                        repo_type="dataset",
+                        revision=self.revision,
+                        cache_dir=self.cache_dir,
+                    )
+                )
+            return _ParquetRecords(source, self.length)
         except ImportError as exc:
             raise ImportError(
                 'Nebius Hugging Face/Parquet loading requires pip install ".[datasets]"'
             ) from exc
-
-        if source is None:
-            records = load_dataset(
-                DATASET_ID,
-                split="train",
-                revision=self.revision,
-                cache_dir=self.cache_dir,
-            )
-        else:
-            records = load_dataset(
-                "parquet",
-                data_files=str(source),
-                split="train",
-                cache_dir=self.cache_dir,
-            )
-        if "trajectory" not in records.column_names:
-            raise ValueError("nebius dataset is missing the trajectory column")
-        if self.length is not None:
-            records = records.select(range(min(self.length, len(records))))
-        return records
 
     def _load_json(self, source: Path) -> list[dict[str, Any]]:
         if source.suffix.lower() not in {".json", ".jsonl"}:
@@ -236,6 +229,59 @@ def _message_content(message: AgentMessage, final_response: str | None) -> str:
     return "\n\n".join(parts)
 
 
+class _ParquetRecords(Sequence):
+    """Indexed source rows, caching one projected row group at a time.
+
+    Keep the downloaded Parquet rather than expanding it to a second, much
+    larger Arrow dataset. Exclude patches and tool definitions from decoding.
+    """
+
+    _columns = (
+        "trajectory_id",
+        "instance_id",
+        "repo",
+        "trajectory",
+        "exit_status",
+        "resolved",
+    )
+
+    def __init__(self, source: Path, length: int | None):
+        from pyarrow import parquet
+
+        self._file = parquet.ParquetFile(source)
+        missing = set(self._columns) - set(self._file.schema_arrow.names)
+        if missing:
+            raise ValueError(f"nebius Parquet is missing columns: {sorted(missing)}")
+        self._size = self._file.metadata.num_rows
+        if length is not None:
+            self._size = min(length, self._size)
+        self._offsets = [0]
+        for group in range(self._file.num_row_groups):
+            self._offsets.append(
+                self._offsets[-1] + self._file.metadata.row_group(group).num_rows
+            )
+        self._group = None
+        self._table = None
+
+    def __len__(self):
+        return self._size
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [self[i] for i in range(*index.indices(self._size))]
+        if index < 0:
+            index += self._size
+        if not 0 <= index < self._size:
+            raise IndexError(index)
+        group = bisect_right(self._offsets, index) - 1
+        if group != self._group:
+            # Release the previous group before decoding its replacement.
+            self._table = None
+            self._table = self._file.read_row_group(group, columns=list(self._columns))
+            self._group = group
+        return self._table.slice(index - self._offsets[group], 1).to_pylist()[0]
+
+
 def _text(value: Any, field: str, *, nonempty: bool = False) -> str:
     if not isinstance(value, str) or (nonempty and not value.strip()):
         raise ValueError(f"{field} must be a {'non-empty ' if nonempty else ''}string")
@@ -289,6 +335,7 @@ def _normalize_task(record: dict[str, Any]) -> AgentTask:
                     arguments = json.loads(json.dumps(arguments, allow_nan=False))
                 if not isinstance(arguments, dict):
                     raise TypeError("tool arguments must decode to an object")
+                json.dumps(arguments, allow_nan=False)
                 calls[call_id] = name
                 tool_calls.append(AgentToolCall(call_id, name, arguments))
 

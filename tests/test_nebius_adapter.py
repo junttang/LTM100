@@ -8,10 +8,10 @@ import json
 import random
 import sys
 from types import SimpleNamespace
-from typing import ClassVar
 
 import pytest
 
+from ltm100.adapters.datasets import nebius as nebius_module
 from ltm100.adapters.datasets.nebius import DATASET_ID, DEFAULT_REVISION, NebiusAdapter
 from ltm100.config import AdapterConfig, build_dataset
 from ltm100.core.scenarios import ChatReplay
@@ -136,39 +136,43 @@ def test_invalid_revision(revision):
         NebiusAdapter(revision=revision)
 
 
-class _ArrowRecords(list):
-    column_names: ClassVar[list[str]] = ["trajectory"]
-
-    def select(self, indices):
-        return _ArrowRecords(self[i] for i in indices)
-
-    def to_list(self):
-        raise AssertionError("the whole Arrow dataset must not be materialized")
-
-
 @pytest.mark.parametrize("local", [False, True])
-def test_arrow_loader_contract(monkeypatch, tmp_path, local):
-    calls = []
-    records = _ArrowRecords([_record(i) for i in range(3)])
+def test_parquet_loader_contract(monkeypatch, tmp_path, local):
+    downloads = []
+    reads = []
+    records = [_record(i) for i in range(3)]
 
-    def load_dataset(*args, **kwargs):
-        calls.append((args, kwargs))
-        return records
+    def download(**kwargs):
+        downloads.append(kwargs)
+        return str(tmp_path / "downloaded.parquet")
+
+    def read(source, length):
+        reads.append((source, length))
+        return records[:length]
 
     monkeypatch.setitem(
-        sys.modules, "datasets", SimpleNamespace(load_dataset=load_dataset)
+        sys.modules, "huggingface_hub", SimpleNamespace(hf_hub_download=download)
     )
+    monkeypatch.setattr(nebius_module, "_ParquetRecords", read)
     path = str(tmp_path / "source.parquet") if local else None
     adapter = NebiusAdapter(path=path, cache_dir="cache", revision="pinned", length=2)
     assert len(adapter._load()) == 2
     assert adapter._task(1).trajectory_id == "trajectory-1"
-    assert calls == [
-        (("parquet",), {"data_files": path, "split": "train", "cache_dir": "cache"})
+    assert downloads == (
+        []
         if local
-        else (
-            (DATASET_ID,),
-            {"split": "train", "revision": "pinned", "cache_dir": "cache"},
-        )
+        else [
+            {
+                "repo_id": DATASET_ID,
+                "filename": "trajectories.parquet",
+                "repo_type": "dataset",
+                "revision": "pinned",
+                "cache_dir": "cache",
+            }
+        ]
+    )
+    assert reads == [
+        (tmp_path / ("source.parquet" if local else "downloaded.parquet"), 2)
     ]
 
 
@@ -180,7 +184,7 @@ def test_arrow_dependency_error(monkeypatch):
     original = builtins.__import__
 
     def without_datasets(name, *args, **kwargs):
-        if name == "datasets":
+        if name == "huggingface_hub":
             raise ImportError("not installed")
         return original(name, *args, **kwargs)
 
@@ -195,20 +199,12 @@ def test_loader_failure_propagates_without_fallback(monkeypatch):
     def fail(*args, **kwargs):
         raise failure
 
-    monkeypatch.setitem(sys.modules, "datasets", SimpleNamespace(load_dataset=fail))
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub", SimpleNamespace(hf_hub_download=fail)
+    )
     with pytest.raises(OSError) as error:
         NebiusAdapter()._load()
     assert error.value is failure
-
-
-def test_arrow_missing_schema(monkeypatch):
-    records = _ArrowRecords([_record()])
-    records.column_names = ["wrong"]
-    monkeypatch.setitem(
-        sys.modules, "datasets", SimpleNamespace(load_dataset=lambda *a, **k: records)
-    )
-    with pytest.raises(ValueError, match="trajectory column"):
-        NebiusAdapter()._load()
 
 
 def test_structured_task_retains_empty_assistant_and_finish():
@@ -462,3 +458,27 @@ def test_nebius_registry_and_dialogue_capability_rejection():
     assert not hasattr(adapter, "session_stream")
     with pytest.raises(ValueError, match="turn_stream"):
         ChatReplay().validate(adapter)
+
+
+@pytest.mark.parametrize(
+    "arguments", ['{"value": NaN}', '{"value": 1e400}', {"value": float("inf")}]
+)
+def test_nonfinite_arguments_fail_before_projection(arguments):
+    record = _record()
+    record["trajectory"][2]["tool_calls"][0]["function"]["arguments"] = arguments
+    with pytest.raises(ValueError, match="JSON compliant"):
+        _adapter([record]).users(1, seed=0)
+
+
+def test_additional_framework_user_messages_are_preserved():
+    record = _record()
+    record["trajectory"].insert(
+        4, {"role": "user", "content": "Please continue working on the task."}
+    )
+    adapter = _adapter([record])
+    user = adapter.users(1, seed=0)[0]
+    task = next(adapter.task_stream(user))
+    assert task.messages[4].role == "user"
+    assert task.messages[4].content == "Please continue working on the task."
+    assert task.final_response == "Fixed bug 0"
+    assert list(adapter.memory_stream(user))[3].content == task.messages[4].content
