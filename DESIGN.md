@@ -146,6 +146,12 @@ class DatasetAdapter(Protocol):
   (per-turn role + chunked items, for chat-replay). Both streams preserve the
   source turn role on every `MemoryItem`; `chat-replay` also fills a missing
   item role from its enclosing `Turn.role`.
+- Nebius mapping: seeded trajectory indices are distributed across the full
+  virtual-user pool, replicating only when there are fewer trajectories than
+  users. A finite `memory_stream` projects activity for generic workloads;
+  the optional `AgentDataset.task_stream` in `ltm100/agent.py` retains independent
+  `AgentTask` records. It does not imply dialogue support or an LTM call policy.
+  See [Nebius](docs/nebius.md); coding-agent scheduling is a separate extension.
 
 ### 4.2 LTMClient (backend adapter)
 

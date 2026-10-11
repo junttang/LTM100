@@ -28,6 +28,7 @@ from ltm100.adapters.backends.mem0 import Mem0Client
 from ltm100.adapters.backends.memmachine import MemMachineClient
 from ltm100.adapters.backends.supermemory import SupermemoryClient
 from ltm100.adapters.datasets.longmemeval import LongMemEvalAdapter
+from ltm100.adapters.datasets.nebius import NebiusAdapter
 from ltm100.adapters.datasets.synthetic import SyntheticAdapter
 from ltm100.common import DatasetAdapter, LTMClient
 
@@ -71,6 +72,7 @@ def _parse_config(raw: dict[str, Any]) -> BenchmarkConfig:
 
 _DATASET_REGISTRY: dict[str, type] = {
     LongMemEvalAdapter.name: LongMemEvalAdapter,
+    NebiusAdapter.name: NebiusAdapter,
     SyntheticAdapter.name: SyntheticAdapter,
 }
 
