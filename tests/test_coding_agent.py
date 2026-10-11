@@ -392,3 +392,55 @@ def test_nebius_capability_without_dialogue_projection(tmp_path):
     ops = requests(islice(scenario.plan(user, dataset, {"seed": 0}), 6))
     assert len(ops) == 3
     assert not hasattr(dataset, "turn_stream")
+
+
+def test_early_assistant_does_not_read_a_future_user_request():
+    original = task()
+    modified = replace(
+        original,
+        messages=(AgentMessage("assistant", "Early activity"),) + original.messages[1:],
+    )
+    ops = requests(
+        events(
+            AgentProfile(integration="mcp", search_probability=1, add_probability=0),
+            modified,
+        )
+    )
+    assert ops[0].query.query == ""
+    assert "Fix bug" not in ops[0].query.query
+    assert ops[1].query.query == "Fix bug 0"
+
+
+def test_empty_nebius_assignment_rejected_before_replay(tmp_path):
+    path = tmp_path / "empty.json"
+    path.write_text("[]")
+    source = NebiusAdapter(path=str(path))
+    with pytest.raises(ValueError, match="assigned user"):
+        CodingAgent().validate_run(source, source.users(1), model="closed")
+
+
+@pytest.mark.parametrize("variation", [None, 0, 0.25, 1])
+def test_modeled_delay_distribution_and_seed_reproducibility(variation):
+    profile = AgentProfile(
+        agent_step_time=20,
+        agent_step_time_variation=variation,
+        tool_time=10,
+        tool_time_variation=variation,
+    )
+    scenario = CodingAgent(profile)
+    samples = []
+    for occurrence in range(100):
+        first = list(scenario._task_plan("u0", task(), occurrence, 42))
+        assert first == list(scenario._task_plan("u0", task(), occurrence, 42))
+        delays = [event.delay for event in first if isinstance(event, Wait)][:3]
+        assert all(delay >= 0 for delay in delays)
+        for delay, mean in zip(delays, (20, 10, 20)):
+            samples.append(delay / mean)
+            if variation is not None:
+                assert 1 - variation <= delay / mean <= 1 + variation
+    if variation is None:
+        assert any(sample > 2 for sample in samples)
+    elif variation > 0:
+        assert len(set(samples)) > 10
+    else:
+        assert set(samples) == {1}

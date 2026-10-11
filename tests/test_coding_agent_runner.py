@@ -395,3 +395,54 @@ def test_existing_raw_schema_omits_empty_agent_context(tmp_path):
     path = tmp_path / "raw.ndjson"
     write_raw_ndjson([OpResult(OpType.ADD, "u0", 1, 2, "ok")], path)
     assert "context" not in json.loads(path.read_text())
+
+
+async def test_waiting_user_does_not_block_another_user_request():
+    run = runner(users=2, ops=2, global_concurrency=1)
+
+    def plan(user, *_):
+        yield Wait(0.05 if user == "u0" else 0.005)
+        yield Op(OpType.ADD, items=[MemoryItem(user)])
+
+    run.scenario.plan = plan
+    await run.run()
+    assert [call[0] for call in run.client.calls] == ["u1", "u0"]
+    assert run.client.calls[1][3] - run.client.calls[0][3] >= 0.035
+
+
+@pytest.mark.parametrize("model", ["closed", "open"])
+async def test_agent_queued_requests_expire_and_running_request_drains(model):
+    run = runner(
+        users=2,
+        duration=0.025,
+        model=model,
+        arrival_rate=200,
+        session_ops=20,
+        global_concurrency=1,
+        queue_bound=20,
+        backend=Backend(0.08),
+    )
+    began = time.monotonic()
+    results = await run.run()
+    assert len(results) == 1
+    assert run.client.calls[0][3] < began + 0.025
+    assert time.monotonic() - began >= 0.07
+    assert results[0].context and results[0].status == "ok"
+    assert run._global_sem._value == 1 and run._admitted == 0
+
+
+async def test_operation_latency_excludes_modeled_agent_and_tool_time():
+    run = runner(
+        AgentProfile(
+            agent_step_time=0.03,
+            agent_step_time_variation=0,
+            tool_time=0.03,
+            tool_time_variation=0,
+        ),
+        users=1,
+        ops=3,
+    )
+    began = time.monotonic()
+    results = await run.run()
+    assert time.monotonic() - began >= 0.08
+    assert all(result.ended_at - result.started_at < 0.02 for result in results)

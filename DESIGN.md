@@ -610,3 +610,19 @@ this design document.
 - **Closed model**: fixed number of concurrent users, each looping.
 - **Open model**: users arrive over time; concurrency is emergent.
 - **Op**: a single `add` or `search` request.
+
+## 15. Coding-agent extension
+
+`coding-agent` consumes the optional `AgentDataset.task_stream` capability;
+existing datasets and scenarios retain their contracts. Source actions remain
+data and are never executed. Hook/MCP policy and timing live in a separate
+agent profile, independent of backend transport.
+
+The plan may yield `Wait` alongside ordinary `Op` requests. A `Wait` advances
+the client timeline without reserving request slots, consuming operation
+budgets, or creating metrics. Optional scenario hooks prepare one task at open
+admission and reset cursors at phase boundaries. Existing scenarios do not
+implement those hooks. Coding-agent request provenance is carried in optional
+`Op`/`OpResult.context` and emitted only when present in raw output; it is not
+backend metadata. See [Coding-agent replay](docs/coding-agent.md) for the full
+policy, repetition, timing, and reporting contracts.

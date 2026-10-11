@@ -174,10 +174,8 @@ class CodingAgent:
         mcp = profile.integration in {"mcp", "hybrid"}
         timing = _rng(seed, user, occurrence, task.trajectory_id, "timing")
         policy = _rng(seed, user, occurrence, task.trajectory_id, "policy")
-        initial = next(
-            message.content for message in task.messages if message.role == "user"
-        )
-        known_input = initial
+        initial = ""
+        known_input = ""
         first_user = True
         calls: dict[str, tuple[str, str]] = {}
         for step, message in enumerate(task.messages):
@@ -206,6 +204,8 @@ class CodingAgent:
                                 profile.tool_time_variation,
                             )
                         )
+                if message.role == "user" and first_user:
+                    initial = text
                 known_input = text
                 include = hook and (
                     profile.hook_scope == "all-steps"
@@ -249,7 +249,7 @@ class CodingAgent:
         yield Wait()
 
     def _search(self, initial: str, latest: str, context: dict, origin: str) -> Op:
-        text = latest if latest == initial else f"{initial}\n\n{latest}"
+        text = latest if not initial or latest == initial else f"{initial}\n\n{latest}"
         return Op(
             OpType.SEARCH,
             query=QueryItem(
