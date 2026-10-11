@@ -36,8 +36,8 @@ class Op:
     group: str = ""
     # Concurrent chat lane within one backend user. None for other workloads.
     session_id: int | None = None
-    # Scenario-specific provenance; empty for existing workloads.
-    context: dict[str, Any] = field(default_factory=dict)
+    # Optional provenance; avoid allocating a mapping for ordinary workloads.
+    context: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -60,7 +60,7 @@ class OpResult:
     n_items: int = 0  # items stored (add) or results returned (search)
     group: str = ""  # workload-profile group, when configured
     session_id: int | None = None
-    context: dict[str, Any] = field(default_factory=dict)
+    context: dict[str, Any] | None = None
 
 
 class Scenario(Protocol):

@@ -446,3 +446,181 @@ async def test_operation_latency_excludes_modeled_agent_and_tool_time():
     results = await run.run()
     assert time.monotonic() - began >= 0.08
     assert all(result.ended_at - result.started_at < 0.02 for result in results)
+
+
+@pytest.mark.parametrize("duration,ops,expected", [(1, 100, 6), (1, 4, 4)])
+async def test_finite_closed_run_accepts_combined_duration_and_ops(
+    duration, ops, expected
+):
+    run = runner(AgentProfile(task_repeat=False), users=1, duration=duration, ops=ops)
+    assert len(await run.run()) == expected
+    assert run.client.active == 0
+
+
+async def test_combined_duration_and_ops_accepts_request_free_mcp_pool():
+    only_finish = replace(task(), messages=(task().messages[1], task().messages[-1]))
+    run = runner(
+        AgentProfile(integration="mcp", search_probability=1, add_probability=0),
+        source=AgentSource([only_finish]),
+        users=1,
+        duration=0.02,
+        ops=100,
+    )
+    assert await asyncio.wait_for(run.run(), 1) == []
+    assert run.client.setup_calls == 1
+
+
+@pytest.mark.parametrize("hook", ["session_available", "prepare_session"])
+@pytest.mark.parametrize("phase", ["measurement", "warmup"])
+@pytest.mark.parametrize("pending", ["executing", "delay", "wait", "queue"])
+async def test_open_preparation_failure_drains_before_teardown(hook, phase, pending):
+    backend = Backend(delay=0.04)
+    run = runner(
+        users=1,
+        duration=0.2,
+        warmup=0.2 if phase == "warmup" else 0,
+        model="open",
+        arrival_rate=1000,
+        session_ops=10,
+        global_concurrency=1,
+        queue_bound=10,
+        backend=backend,
+    )
+    failure = RuntimeError("later source preparation failed")
+    admissions = []
+    active_lanes = {}
+    original_admit = run._admit_open_session
+
+    def admit(user, active):
+        active_lanes.update({user: active[user]})
+        return original_admit(user, active)
+
+    run._admit_open_session = admit
+    run.scenario.max_sessions_per_user = lambda user: 100
+
+    def prepare(user, dataset):
+        state = {"test_session": len(admissions)}
+        admissions.append(state)
+        return state
+
+    def plan(user, dataset, state):
+        lane = state["test_session"]
+        if pending == "delay":
+            yield Op(OpType.ADD, items=[MemoryItem("delayed")], delay=0.03)
+        elif pending == "wait":
+            yield Wait(0.03)
+        else:
+            yield Op(OpType.ADD, items=[MemoryItem(f"first-{lane}")])
+        yield Op(OpType.ADD, items=[MemoryItem("must not dispatch")])
+
+    def ready():
+        if pending == "queue":
+            return backend.active == 1 and run._admitted >= 2
+        if pending == "executing":
+            return backend.active == 1
+        return bool(admissions)
+
+    def available(user, dataset):
+        if hook == "session_available" and ready():
+            raise failure
+        return True
+
+    def guarded_prepare(user, dataset):
+        if hook == "prepare_session" and ready():
+            raise failure
+        return prepare(user, dataset)
+
+    run.scenario.session_available = available
+    run.scenario.prepare_session = guarded_prepare
+    run.scenario.plan = plan
+    with pytest.raises(RuntimeError) as caught:
+        await asyncio.wait_for(run.run(), 1)
+    assert caught.value is failure
+    assert backend.active == 0
+    assert run._admitted == 0
+    assert not any(active_lanes.values())
+    assert run._stop.is_set()
+    # The caller may now safely delete state and close the transport.
+    calls_at_teardown = len(backend.calls)
+    assert calls_at_teardown == (1 if pending in {"executing", "queue"} else 0)
+    await asyncio.sleep(0.05)
+    assert len(backend.calls) == calls_at_teardown and backend.active == 0
+    assert not [
+        task
+        for task in asyncio.all_tasks()
+        if task.get_coro().__qualname__ == "LoadRunner._open_session"
+    ]
+
+
+async def test_open_synchronous_plan_failure_releases_reserved_lane():
+    run = runner(users=1, duration=0.02, model="open", arrival_rate=500, session_ops=1)
+    active_lanes = {}
+    original_admit = run._admit_open_session
+
+    def admit(user, active):
+        active_lanes.update({user: active[user]})
+        return original_admit(user, active)
+
+    def broken_plan(*args):
+        raise RuntimeError("synchronous plan construction failed")
+
+    run._admit_open_session = admit
+    run.scenario.max_sessions_per_user = lambda user: 1
+    run.scenario.plan = broken_plan
+    with pytest.raises(RuntimeError, match="synchronous plan"):
+        await run.run()
+    assert not any(active_lanes.values())
+    assert run.client.calls == []
+
+
+async def test_open_arrival_cancellation_drains_executing_request():
+    started = asyncio.Event()
+    completed = []
+
+    class ObservedBackend(Backend):
+        async def call(self, *args):
+            started.set()
+            await super().call(*args)
+            completed.append(True)
+
+    backend = ObservedBackend(delay=0.04)
+    run = runner(
+        users=1,
+        duration=1,
+        model="open",
+        arrival_rate=100,
+        session_ops=10,
+        backend=backend,
+    )
+    workload = asyncio.create_task(run.run())
+    await asyncio.wait_for(started.wait(), 1)
+    workload.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await workload
+    assert backend.active == 0 and completed == [True]
+    assert len(backend.calls) == 1
+    await asyncio.sleep(0.02)
+    assert len(backend.calls) == 1
+
+
+async def test_late_source_read_failure_leaves_no_live_open_session():
+    class BrokenSource(AgentSource):
+        def task_stream(self, user):
+            yield task()
+            raise ValueError("corrupt later trajectory")
+
+    backend = Backend(delay=0.04)
+    run = runner(
+        source=BrokenSource(),
+        backend=backend,
+        users=1,
+        duration=0.2,
+        model="open",
+        arrival_rate=1000,
+        session_ops=10,
+    )
+    with pytest.raises(ValueError, match="corrupt later trajectory"):
+        await run.run()
+    assert backend.active == 0 and len(backend.calls) == 1
+    await asyncio.sleep(0.05)
+    assert backend.active == 0 and len(backend.calls) == 1

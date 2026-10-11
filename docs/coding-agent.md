@@ -117,7 +117,8 @@ content can grow or deduplicate according to backend behavior.
 - **Finite replay:** `task_repeat: false` stops closed users after their task
   pools are exhausted. Duration is an upper bound, so closed runs may finish
   earlier. Pure count-based closed runs are rejected because the exact budget
-  may be unreachable. In open runs, arrivals targeting an exhausted pool do
+  may be unreachable. Core configurations with both duration and ops are
+  allowed; whichever bound is reached first limits replay. In open runs, arrivals targeting an exhausted pool do
   not enter offered/admitted/rejected session counters; the run continues to its
   duration deadline. Exhaustion is not a congestion rejection.
 
@@ -138,10 +139,13 @@ request concurrency slots, consume `--ops`/`--session-ops`, create rejection
 records, or enter request latency/QPS. Wait-only steps and trailing task time
 are retained; zero-duration waits cooperate with the event loop. Deadlines
 stop new requests and waits, while requests already executing may finish.
-Reaching a count budget can truncate remaining task activity. A count-based
-MCP-only run is rejected if any assigned user's pool has no eligible call
+Reaching a count budget can truncate remaining task activity. A pure count-based
+MCP-only closed run is rejected if any assigned user's pool has no eligible call
 positions. Unexpected coding-agent plan errors fail the run rather than
-producing a successful partial report.
+producing a successful partial report. Open admission/preparation errors stop
+further dispatch and drain all existing sessions before the error reaches the
+caller, so backend teardown cannot overlap surviving workload sessions.
+Already dispatched requests finish; pending waits are bounded by the deadline.
 
 Existing summary, raw, client time series, server metrics, pre-ingest, cleanup,
 and multiprocess paths are reused. Pre-ingest still uses the dataset's generic
@@ -171,7 +175,8 @@ use client resources. Monitor client saturation when interpreting performance.
 Offline tests cover policy order and payloads, source/tool edge cases,
 reproducible selection, independent timing randomness, task cycling and
 admission, wait-only activity, deadlines, exact budgets, warm-up, multiprocessing,
-and all four adapter contracts:
+open admission/preparation failures, cancellation, and all four adapter
+contracts:
 
 ```sh
 pytest -q tests/test_coding_agent.py tests/test_coding_agent_runner.py \
@@ -188,7 +193,10 @@ LTM100_MEMMACHINE_E2E_URL=http://127.0.0.1:8080 \
 They exercise five policy combinations under both models, each with one/two
 processes, pre-ingest, warm-up, raw/client/server reports, isolated storage,
 and cleanup. Server HTTP add/search deltas are compared with measured request
-counts. Set `LTM100_NEBIUS_E2E_PATH` to use local official records; the tests
+counts. Additional failure-path tests inject a later source-read error during
+warm-up and measurement, verify the executing request finishes, and check
+that cleanup and transport closure leave no surviving session calls.
+Set `LTM100_NEBIUS_E2E_PATH` to use local official records; the tests
 select two trajectories. Default fixtures are authored, not bundled source data.
 A standalone SQLite/mock-embedding setup verifies functionality and report
 alignment, not production capacity or retrieval quality.

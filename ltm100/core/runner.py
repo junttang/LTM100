@@ -311,56 +311,69 @@ class LoadRunner:
         next_user = 0
         active_sessions: dict[UserId, set[int]] = {user: set() for user in users}
 
-        t = self._start_time
-        while not self._should_stop() and not self._deadline_reached(deadline):
-            # Inter-arrival ~ Exponential(rate).
-            gap = rng.expovariate(rate)
-            t += gap
-            now = time.monotonic()
-            if t > deadline:
-                break
-            wait = max(0.0, t - now)
-            if not await self._wait_delay(wait, deadline) or self._should_stop():
-                break
-            user = users[next_user % len(users)]
-            next_user += 1
-            available = getattr(self.scenario, "session_available", None)
-            if available is not None and not available(user, self.dataset):
-                # Exhausted finite sources are not congestion rejections.
-                continue
-            group_for = getattr(self.scenario, "session_group", None)
-            group = group_for(user) if group_for is not None else ""
-            if self._deadline_reached(deadline):
-                break
-            if self._record_results:
-                self.session_stats.record("offered", group)
-            admission = self._admit_open_session(user, active_sessions)
-            if admission is None:
+        try:
+            t = self._start_time
+            while not self._should_stop() and not self._deadline_reached(deadline):
+                # Inter-arrival ~ Exponential(rate).
+                gap = rng.expovariate(rate)
+                t += gap
+                now = time.monotonic()
+                if t > deadline:
+                    break
+                wait = max(0.0, t - now)
+                if not await self._wait_delay(wait, deadline) or self._should_stop():
+                    break
+                user = users[next_user % len(users)]
+                next_user += 1
+                available = getattr(self.scenario, "session_available", None)
+                if available is not None and not available(user, self.dataset):
+                    # Exhausted finite sources are not congestion rejections.
+                    continue
+                group_for = getattr(self.scenario, "session_group", None)
+                group = group_for(user) if group_for is not None else ""
+                if self._deadline_reached(deadline):
+                    break
                 if self._record_results:
-                    self.session_stats.record("rejected", group)
-                continue
-            session_id, session_count = admission
-            prepare = getattr(self.scenario, "prepare_session", None)
-            session_state = prepare(user, self.dataset) if prepare else None
-            if self._record_results:
-                self.session_stats.record("admitted", group)
-            session_tasks.append(
-                asyncio.create_task(
-                    self._open_session(
-                        user,
-                        deadline,
-                        session_id=session_id,
-                        session_count=session_count,
-                        active_sessions=active_sessions,
-                        session_state=session_state,
+                    self.session_stats.record("offered", group)
+                admission = self._admit_open_session(user, active_sessions)
+                if admission is None:
+                    if self._record_results:
+                        self.session_stats.record("rejected", group)
+                    continue
+                session_id, session_count = admission
+                try:
+                    prepare = getattr(self.scenario, "prepare_session", None)
+                    session_state = prepare(user, self.dataset) if prepare else None
+                    if self._record_results:
+                        self.session_stats.record("admitted", group)
+                    session_tasks.append(
+                        asyncio.create_task(
+                            self._open_session(
+                                user,
+                                deadline,
+                                session_id=session_id,
+                                session_count=session_count,
+                                active_sessions=active_sessions,
+                                session_state=session_state,
+                            )
+                        )
                     )
-                )
-            )
 
-        # Let in-flight sessions finish (bounded by session_ops, so finite).
-        if session_tasks:
+                except BaseException:
+                    # No task owns this reservation if preparation fails.
+                    if session_id is not None:
+                        active_sessions[user].discard(session_id)
+                    raise
+        except BaseException:
+            # Stop admissions and further dispatch before the caller tears down
+            # backend state. Already executing requests are allowed to finish.
+            self._stop.set()
+            raise
+        finally:
+            # Preparation errors must not bypass session draining. Preserve the
+            # original error; inspect plan outcomes only after a normal arrival loop.
             outcomes = await asyncio.gather(*session_tasks, return_exceptions=True)
-            self._check_plan_outcomes(outcomes)
+        self._check_plan_outcomes(outcomes)
 
     def _admit_open_session(
         self,
@@ -404,8 +417,8 @@ class LoadRunner:
             rng_state["session_count"] = session_count
         if session_state is not None:
             rng_state.update(session_state)
-        plan = self.scenario.plan(user, self.dataset, rng_state)
         try:
+            plan = self.scenario.plan(user, self.dataset, rng_state)
             consumed = 0
             while consumed < n_ops:
                 if self._should_stop() or self._deadline_reached(deadline):
@@ -421,15 +434,19 @@ class LoadRunner:
                 consumed += 1
                 if not await self._wait_delay(op.delay, deadline):
                     return
+                if self._should_stop():
+                    return
                 acquired = await self._acquire_slot_bounded(deadline)
                 if acquired is None:
                     return
                 if not acquired:
-                    if self._deadline_reached(deadline):
+                    if self._should_stop() or self._deadline_reached(deadline):
                         return
                     await self._record_rejected(op, user)
                     continue
                 try:
+                    if self._should_stop():
+                        return
                     await self._execute(user, op)
                 finally:
                     self._release_slot()

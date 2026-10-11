@@ -208,3 +208,74 @@ async def test_live_agent_policies_task_provenance_and_observation(
                         assert not (contents & (other - expected_adds[user]))
             finally:
                 await client.teardown(users, delete=True)
+
+
+@pytest.mark.parametrize("warmup", [0, 0.3])
+async def test_live_late_source_failure_drains_before_backend_cleanup(tmp_path, warmup):
+    import asyncio
+
+    from ltm100.core.config import RunConfig
+    from ltm100.core.runner import LoadRunner
+
+    path = tmp_path / "source.json"
+    _write_source(path, 2)
+    dataset = NebiusAdapter(path=str(path), length=2)
+    original_stream = dataset.task_stream
+
+    def broken_stream(user):
+        yield next(original_stream(user))
+        raise ValueError("corrupt later source trajectory")
+
+    dataset.task_stream = broken_stream
+    calls = []
+    completed = []
+    active = []
+
+    class ObservedClient(MemMachineClient):
+        async def search(self, user, query):
+            calls.append("search")
+            active.append(user)
+            try:
+                result = await super().search(user, query)
+                await asyncio.sleep(0.05)
+                completed.append("search")
+                return result
+            finally:
+                active.remove(user)
+
+        async def add(self, user, items):
+            calls.append("add")
+            return await super().add(user, items)
+
+        async def teardown(self, users, *, delete=True):
+            assert not active
+            return await super().teardown(users, delete=delete)
+
+    async with ObservedClient(
+        base_url=os.environ["LTM100_MEMMACHINE_E2E_URL"],
+        org_prefix=f"agent_failure_{uuid.uuid4().hex}",
+        timeout=30,
+    ) as client:
+        run = LoadRunner(
+            client=client,
+            dataset=dataset,
+            scenario=CodingAgent(),
+            config=RunConfig(
+                users=1,
+                duration=0.3,
+                warmup=warmup,
+                model="open",
+                arrival_rate=1000,
+                session_ops=20,
+            ),
+        )
+        try:
+            with pytest.raises(ValueError, match="corrupt later source"):
+                await asyncio.wait_for(run.run(), 10)
+            assert calls == completed == ["search"]
+            assert not active
+        finally:
+            await client.teardown(run.users, delete=True)
+        await asyncio.sleep(0.05)
+        assert calls == completed == ["search"]
+        assert not active

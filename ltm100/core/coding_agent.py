@@ -12,12 +12,12 @@ import random
 from collections.abc import Iterator
 from typing import Any
 
-from ltm100.adapters.datasets.longmemeval import _split_chunks
 from ltm100.agent import AgentMessage, AgentTask
 from ltm100.common import DatasetAdapter, MemoryItem, QueryItem, UserId
 from ltm100.core.agent_profile import AgentProfile
 from ltm100.core.config import RunConfig
 from ltm100.core.op import Op, OpType, Wait
+from ltm100.text import split_chunks
 
 
 def _content(message: AgentMessage, final_response: str | None = None) -> str:
@@ -89,8 +89,10 @@ class CodingAgent:
                 )
 
     def validate_config(self, config: RunConfig) -> None:
-        self._count_run = config.model == "closed" and config.ops > 0
-        if not self.profile.task_repeat and config.model == "closed" and config.ops > 0:
+        self._count_run = (
+            config.model == "closed" and config.ops > 0 and config.duration <= 0
+        )
+        if not self.profile.task_repeat and self._count_run:
             raise ValueError("task_repeat=false requires a duration-based run")
 
     def _eligible(self, task: AgentTask) -> bool:
@@ -264,7 +266,7 @@ class CodingAgent:
     def _adds(
         self, user: str, text: str, role: str, context: dict, origin: str
     ) -> Iterator[Op]:
-        for index, chunk in enumerate(_split_chunks(text, self.profile.chunk_chars)):
+        for index, chunk in enumerate(split_chunks(text, self.profile.chunk_chars)):
             if chunk:
                 yield Op(
                     OpType.ADD,
