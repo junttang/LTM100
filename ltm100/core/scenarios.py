@@ -40,6 +40,7 @@ from weakref import WeakKeyDictionary
 
 from ltm100.common import DatasetAdapter, MemoryItem, QueryItem, Turn, UserId
 from ltm100.core.chat_profile import ChatProfile, ChatSettings
+from ltm100.core.coding_agent import CodingAgent
 from ltm100.core.op import Op, OpType, Scenario
 
 _MEMO: WeakKeyDictionary[DatasetAdapter, dict[UserId, list[MemoryItem]]] = (
@@ -605,6 +606,7 @@ class ChatReplay:
 
 
 SCENARIOS: dict[str, type] = {
+    CodingAgent.name: CodingAgent,
     ChatReplay.name: ChatReplay,
     AddLoad.name: AddLoad,
     SearchLoad.name: SearchLoad,

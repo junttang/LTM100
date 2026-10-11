@@ -45,6 +45,7 @@ class CodingAgent:
     """One closed user replays tasks; one open arrival consumes exactly one task."""
 
     name = "coding-agent"
+    strict_plans = True
 
     def __init__(
         self,
@@ -65,20 +66,51 @@ class CodingAgent:
         self.top_k = top_k
         self.expand_context = expand_context
         self.filter = filter
+        self._count_run = False
         self.reset_phase()
 
     def validate_run(self, dataset: DatasetAdapter, users: list[UserId], *, model: str):
         if not callable(getattr(dataset, "task_stream", None)):
             raise TypeError("coding-agent requires a dataset with task_stream")
+        if not users:
+            raise ValueError("coding-agent requires at least one assigned user")
         # Do not retain all normalized trajectories. Keep only one lookahead
         # per user; the dataset validates source records before assigning users.
         for user in users:
             if not self._peek(user, dataset):
                 raise ValueError(f"coding-agent has no tasks for user {user!r}")
+            if (
+                self._count_run
+                and self.profile.integration == "mcp"
+                and not any(self._eligible(task) for task in dataset.task_stream(user))
+            ):
+                raise ValueError(
+                    f"coding-agent MCP policy cannot emit requests for user {user!r}"
+                )
 
     def validate_config(self, config: RunConfig) -> None:
+        self._count_run = config.model == "closed" and config.ops > 0
         if not self.profile.task_repeat and config.model == "closed" and config.ops > 0:
             raise ValueError("task_repeat=false requires a duration-based run")
+
+    def _eligible(self, task: AgentTask) -> bool:
+        for index, message in enumerate(task.messages):
+            if (
+                message.role == "tool"
+                and message.name != "finish"
+                and self.profile.add_probability > 0
+            ):
+                return True
+            terminal = index == len(task.messages) - 1 and any(
+                call.name == "finish" for call in message.tool_calls
+            )
+            if (
+                message.role == "assistant"
+                and not terminal
+                and self.profile.search_probability > 0
+            ):
+                return True
+        return False
 
     def reset_phase(self) -> None:
         """Warm-up and measurement start at independent task/policy cursors."""
@@ -166,13 +198,14 @@ class CodingAgent:
             if message.role in {"user", "tool"}:
                 if message.role == "tool":
                     _, name = calls[message.tool_call_id]
-                    yield Wait(
-                        profile.delay(
-                            timing,
-                            profile.tool_times.get(name, profile.tool_time),
-                            profile.tool_time_variation,
+                    if name != "finish":
+                        yield Wait(
+                            profile.delay(
+                                timing,
+                                profile.tool_times.get(name, profile.tool_time),
+                                profile.tool_time_variation,
+                            )
                         )
-                    )
                 known_input = text
                 include = hook and (
                     profile.hook_scope == "all-steps"
@@ -186,6 +219,7 @@ class CodingAgent:
                 if (
                     message.role == "tool"
                     and mcp
+                    and message.name != "finish"
                     and policy.random() < profile.add_probability
                 ):
                     action, _ = calls[message.tool_call_id]
@@ -209,8 +243,7 @@ class CodingAgent:
                 if hook and (profile.hook_scope == "all-steps" or terminal):
                     yield from self._adds(user, text, "assistant", context, "hook")
                 for call in message.tool_calls:
-                    if call.name != "finish":
-                        calls[call.id] = (text, call.name)
+                    calls[call.id] = (text, call.name)
         # Even a zero-delay task with no selected LTM calls must cooperate
         # with arrivals, deadlines and other users rather than busy-loop.
         yield Wait()
